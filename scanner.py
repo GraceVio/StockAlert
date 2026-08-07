@@ -52,6 +52,31 @@ WATCHLIST = [
 # Trimmed illiquid / hyper-speculative names are listed in TRIMMED_STOCKS.md
 # (kept out on purpose — see that file for the reasons).
 
+# If watchlist.txt exists, it OVERRIDES the list above (so you can edit the
+# watchlist from Telegram with /add and /remove without touching the code).
+WATCHLIST_FILE = "watchlist.txt"
+
+
+def load_watchlist():
+    """Read tickers from WATCHLIST_FILE if present; else use the built-in list."""
+    if not os.path.exists(WATCHLIST_FILE):
+        return list(WATCHLIST)
+    out = []
+    with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                out.append(line.upper())
+    # de-duplicate, keep order
+    seen, uniq = set(), []
+    for t in out:
+        if t not in seen:
+            seen.add(t); uniq.append(t)
+    return uniq or list(WATCHLIST)
+
+
+WATCHLIST = load_watchlist()
+
 # Strategy parameters
 INTERVAL          = "15m"   # candle size
 LOOKBACK          = "5d"    # history to pull (15m data limited to ~60d)

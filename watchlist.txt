@@ -1,0 +1,65 @@
+# Stock Alert Bot watchlist — one ticker per line.
+# Lines starting with # are comments. Edit here or use /add and /remove in Telegram.
+# US tickers are plain (NVDA). EU/UK use Yahoo suffixes: .DE .AS .PA .L .F
+# Index ETFs SPY & QQQ are used as market context and always included.
+
+SPY
+QQQ
+
+# US mega / large-cap tech
+NVDA
+AAPL
+MSFT
+AMZN
+GOOGL
+META
+AVGO
+TSM
+AMD
+QCOM
+MU
+ORCL
+CRM
+ADBE
+NOW
+INTU
+NFLX
+TSLA
+PLTR
+IBM
+DELL
+ARM
+MRVL
+INTC
+
+# US large-cap non-tech
+LLY
+NVO
+KO
+PEP
+COST
+WMT
+MCD
+V
+MA
+JPM
+UNH
+HD
+XOM
+CVX
+BSX
+JD
+FICO
+
+# Europe large-cap (EUR)
+SAP.DE
+SIE.DE
+ASML.AS
+AIR.DE
+ALV.DE
+DTE.DE
+IFX.DE
+SHELL.AS
+MC.PA
+OR.PA
+BY6.F

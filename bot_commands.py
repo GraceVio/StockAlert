@@ -23,6 +23,9 @@ Run (locally, one pass):  python bot_commands.py
 
 import os
 import requests
+import datetime as dt
+from zoneinfo import ZoneInfo
+import yfinance as yf
 import scanner as s
 import rank_today as rk
 import backtest as bt
@@ -37,6 +40,10 @@ HELP = (
     "/scan — run the dip-in-uptrend scan now\n"
     "/sector — 📊 sector strength ranking\n"
     "/backtest — 📈 how the strategy performed (~60d)\n"
+    "/watchlist — 📋 show tracked tickers\n"
+    "/add SYM — ➕ add a ticker (e.g. /add NVDA)\n"
+    "/remove SYM — ➖ remove a ticker\n"
+    "/status — 💚 is the bot alive &amp; market regime\n"
     "/help — this message\n\n"
     "<i>Nothing here predicts prices. All rules-based. You decide.</i>"
 )
@@ -73,6 +80,75 @@ def _do_sector():
     return "\n".join(lines)
 
 
+def _do_watchlist():
+    wl = s.load_watchlist()
+    picks = [t for t in wl if t not in ("SPY", "QQQ")]
+    return (f"📋 <b>Watchlist</b> — {len(picks)} tickers (+ SPY/QQQ context)\n\n"
+            + ", ".join(picks)
+            + "\n\n<i>Add with /add SYM · remove with /remove SYM</i>")
+
+
+def _valid_ticker(sym: str) -> bool:
+    """Light check that Yahoo actually has data for this symbol."""
+    try:
+        df = yf.download(sym, period="5d", interval="1d",
+                         progress=False, auto_adjust=False)
+        return df is not None and len(df) > 0
+    except Exception:
+        return False
+
+
+def _do_add(sym: str):
+    sym = sym.strip().upper()
+    if not sym:
+        return "Usage: /add SYM   (e.g. /add NVDA or /add SAP.DE)"
+    wl = s.load_watchlist()
+    if sym in wl:
+        return f"ℹ️ <b>{sym}</b> is already on the watchlist."
+    if not _valid_ticker(sym):
+        return (f"❌ <b>{sym}</b> — no Yahoo data found. Check the symbol "
+                f"(EU names need a suffix like .DE .AS .PA .L .F).")
+    with open(s.WATCHLIST_FILE, "a", encoding="utf-8") as f:
+        f.write(f"{sym}\n")
+    return (f"➕ Added <b>{sym}</b>. Watchlist now {len(wl)+1} tickers.\n"
+            f"<i>Saved to GitHub — active from the next scan.</i>")
+
+
+def _do_remove(sym: str):
+    sym = sym.strip().upper()
+    if not sym:
+        return "Usage: /remove SYM   (e.g. /remove INTC)"
+    if sym in ("SPY", "QQQ"):
+        return "⚠️ SPY/QQQ are used as market context — kept on purpose."
+    wl = s.load_watchlist()
+    if sym not in wl:
+        return f"ℹ️ <b>{sym}</b> isn't on the watchlist."
+    with open(s.WATCHLIST_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+    kept = [ln for ln in lines
+            if ln.strip().upper() != sym or ln.strip().startswith("#")]
+    with open(s.WATCHLIST_FILE, "w", encoding="utf-8") as f:
+        f.writelines(kept)
+    return (f"➖ Removed <b>{sym}</b>. Watchlist now {len(wl)-1} tickers.\n"
+            f"<i>Saved to GitHub — active from the next scan.</i>")
+
+
+def _do_status():
+    now = dt.datetime.now(ZoneInfo("Europe/Berlin")).strftime("%d %b %Y, %H:%M CET")
+    wl = s.load_watchlist()
+    picks = len([t for t in wl if t not in ("SPY", "QQQ")])
+    try:
+        healthy = s.market_is_healthy()
+        regime = "🟢 HEALTHY (dip-buys active)" if healthy else "🔴 WEAK (dip-buys suppressed)"
+    except Exception:
+        regime = "unknown (data fetch failed)"
+    return (f"💚 <b>Bot is alive</b>\n"
+            f"🕒 {now}\n"
+            f"📋 Watchlist: {picks} tickers\n"
+            f"🌡️ Market regime: {regime}\n\n"
+            f"<i>You're reading this, so the command loop works. Type /help for all commands.</i>")
+
+
 def _do_scan():
     if not s.market_is_healthy():
         return ("Market regime <b>WEAK</b> (SPY below its 50-day average) — "
@@ -89,8 +165,18 @@ def _do_scan():
     return f"🔍 Scan done — {len(hits)} setup(s) sent above."
 
 
-def handle(cmd: str):
-    cmd = cmd.lower().split("@")[0]  # strip @botname if present
+def handle(text: str):
+    parts = text.split()
+    cmd = parts[0].lower().split("@")[0]  # strip @botname if present
+    arg = parts[1] if len(parts) > 1 else ""
+    if cmd == "/watchlist":
+        return _do_watchlist()
+    if cmd == "/add":
+        return _do_add(arg)
+    if cmd == "/remove":
+        return _do_remove(arg)
+    if cmd == "/status":
+        return _do_status()
     if cmd == "/rank":
         _reply("👑 Analysing the watchlist live… one moment.")
         rk.run(send=True)
@@ -132,7 +218,7 @@ def main():
         if not text.startswith("/"):
             continue
         print(f"Handling command: {text!r}")
-        reply = handle(text.split()[0])
+        reply = handle(text)
         if reply:
             _reply(reply)
 
