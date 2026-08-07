@@ -86,6 +86,9 @@ RSI_OVERSOLD      = 35      # pullback threshold
 ATR_LEN           = 14
 ATR_STOP_MULT     = 1.5     # stop = entry - 1.5 * ATR
 RR_TARGET         = 3.0     # target = entry + 3.0 * risk (optimized 2026-08-07)
+EXTENDED_HOURS    = True     # include pre-/after-market bars (you trade extended
+                            # hours on Trade Republic) — keeps prices current, but
+                            # off-session volume is thin so signals are a bit noisier
 
 # Upgrades
 MARKET_REGIME_FILTER = True   # only fire longs when SPY is above its 50-day avg
@@ -415,7 +418,7 @@ def check_ticker(ticker: str):
     """Return an alert dict if a setup fires on the latest candle, else None."""
     try:
         df = yf.download(ticker, period=LOOKBACK, interval=INTERVAL,
-                         progress=False, auto_adjust=False)
+                         progress=False, auto_adjust=False, prepost=EXTENDED_HOURS)
     except Exception as e:
         print(f"  {ticker}: download error: {e}")
         return None

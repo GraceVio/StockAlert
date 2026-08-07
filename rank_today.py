@@ -34,8 +34,10 @@ TOP_N = 8
 def _score_ticker(ticker: str):
     """Return a dict with the current fit score, or None if no data."""
     try:
+        # prepost=True so pre-/after-hours bars show up (you trade extended
+        # hours on Trade Republic, so this keeps prices as current as possible).
         df = yf.download(ticker, period=s.LOOKBACK, interval=s.INTERVAL,
-                         progress=False, auto_adjust=False)
+                         progress=False, auto_adjust=False, prepost=s.EXTENDED_HOURS)
     except Exception:
         return None
     if df is None or len(df) < s.EMA_TREND + 5:
@@ -80,6 +82,13 @@ def _score_ticker(ticker: str):
     # Does it also meet the strict live trigger right now?
     firing = bool(in_uptrend and rsi_prev <= s.RSI_OVERSOLD and rsi_now > rsi_prev)
 
+    # Timestamp of the newest candle we used (how fresh this price is).
+    try:
+        ts = df.index[-1]
+        as_of = ts.tz_convert("Europe/Berlin") if ts.tzinfo else ts
+    except Exception:
+        as_of = None
+
     return {
         "ticker": ticker,
         "score": score,
@@ -90,6 +99,7 @@ def _score_ticker(ticker: str):
         "uptrend": in_uptrend,
         "sector_strong": sec_strong,
         "firing": firing,
+        "as_of": as_of,
         "reasons": reasons,
     }
 
@@ -112,9 +122,48 @@ def _stamp() -> str:
     return now.strftime("%d %b %Y, %H:%M CET")
 
 
+def _us_session() -> str:
+    """US market phase now: 'regular', 'pre', 'post', or 'closed'."""
+    try:
+        ny = dt.datetime.now(ZoneInfo("America/New_York"))
+        if ny.weekday() >= 5:
+            return "closed"
+        m = ny.hour * 60 + ny.minute
+        if (9 * 60 + 30) <= m < (16 * 60):
+            return "regular"
+        if (4 * 60) <= m < (9 * 60 + 30):
+            return "pre"
+        if (16 * 60) <= m < (20 * 60):
+            return "post"
+        return "closed"
+    except Exception:
+        return "regular"
+
+
+def _freshness_line(rows) -> str:
+    """Describe how current the data is, based on the newest candle used."""
+    stamps = [r["as_of"] for r in rows if r.get("as_of") is not None]
+    if not stamps:
+        return ""
+    newest = max(stamps)
+    age_h = (dt.datetime.now(ZoneInfo("Europe/Berlin")) - newest).total_seconds() / 3600
+    when = newest.strftime("%d %b %H:%M CET")
+    phase = _us_session()
+    label = {
+        "regular": "US market OPEN · live (~15-min delayed)",
+        "pre": "US pre-market · live extended-hours prices (thin volume)",
+        "post": "US after-hours · live extended-hours prices (thin volume)",
+        "closed": f"US market CLOSED — latest available price (~{age_h:.0f}h old)",
+    }[phase]
+    return f"📈 Data as of <b>{when}</b> · {label}"
+
+
 def format_ranking(rows, healthy: bool = True) -> str:
-    lines = [f"👑 <b>King Stocks — best-qualified setups now</b>",
-             f"<i>{_stamp()}</i>"]
+    lines = ["👑 <b>King Stocks — best-qualified setups now</b>",
+             f"<i>Asked: {_stamp()}</i>"]
+    fresh = _freshness_line(rows)
+    if fresh:
+        lines.append(fresh)
     if not healthy:
         lines.append("\n⚠️ <b>Market regime WEAK</b> (SPY below its 50-day avg). "
                      "Dip-buys are lower-odds now — these are relative rankings only.")
