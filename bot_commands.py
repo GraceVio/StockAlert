@@ -39,6 +39,7 @@ API     = f"https://api.telegram.org/bot{TOKEN}"
 HELP = (
     "🤖 <b>Commands</b>\n"
     "/rank — 👑 King Stocks: best-qualified setups right now\n"
+    "/score SYM — 🔎 fit score (0-100) for one stock\n"
     "/scan — run the dip-in-uptrend scan now\n"
     "/sector — 📊 sector strength ranking\n"
     "/backtest — 📈 how the strategy performed (~60d)\n"
@@ -78,20 +79,7 @@ def _cell(v):
     return f"{v:+.1f}" if v is not None else "  -"
 
 
-# Example constituents per sector (liquid names), for the drill-down view.
-SECTOR_HOLDINGS = {
-    "Technology":       ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "AMD"],
-    "Comm. Services":   ["GOOGL", "META", "NFLX", "DIS", "TMUS", "VZ"],
-    "Consumer Disc.":   ["AMZN", "TSLA", "HD", "MCD", "NKE", "BKNG"],
-    "Consumer Staples": ["WMT", "COST", "PG", "KO", "PEP", "PM"],
-    "Energy":           ["XOM", "CVX", "COP", "SLB", "EOG", "WMB"],
-    "Financials":       ["JPM", "BAC", "WFC", "GS", "MS", "V"],
-    "Health Care":      ["LLY", "UNH", "JNJ", "ABBV", "MRK", "TMO"],
-    "Industrials":      ["GE", "CAT", "HON", "UNP", "BA", "RTX"],
-    "Materials":        ["LIN", "SHW", "FCX", "NEM", "APD", "ECL"],
-    "Real Estate":      ["PLD", "AMT", "EQIX", "WELL", "SPG", "O"],
-    "Utilities":        ["NEE", "DUK", "SO", "D", "AEP", "EXC"],
-}
+SECTOR_HOLDINGS = s.SECTOR_HOLDINGS   # shared list (defined in scanner.py)
 
 # Short display labels for the sector buttons (callback carries the full name).
 _SECTOR_SHORT = {
@@ -371,6 +359,11 @@ def handle(text: str):
         _reply("👑 Analysing the watchlist live… one moment.")
         rk.run(send=True)
         return None
+    if cmd == "/score":
+        if not arg:
+            return "Usage: /score SYM   (e.g. /score NVDA or /score SAP.DE)"
+        _reply(f"🔎 Scoring {arg.upper()}… one moment.")
+        return rk.score_one(arg)
     if cmd == "/scan":
         _reply("🔍 Scanning now… one moment.")
         return _do_scan()

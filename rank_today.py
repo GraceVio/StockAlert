@@ -2,21 +2,19 @@
 King Stocks — live "best-qualified setups right now" ranker
 -----------------------------------------------------------
 This is NOT a prediction of which stocks will go up. It CANNOT do that, and
-neither can anyone. What it DOES: score every watchlist name by how well it
-matches the exact edge we backtested (uptrend + pulling back + volume + strong
-sector) and show you the best-qualified candidates *at this moment*.
+neither can anyone. What it DOES: score a broad pool of liquid, Trade-Republic-
+tradable stocks (your watchlist + all sector-heatmap constituents, ~100 names)
+by how well each matches the edge we backtested, and show the best-qualified
+candidates *at this moment*. Re-run any time — it re-analyses live.
 
-Re-run it any time — it re-analyses live off the current market. High-conviction
-setups backtested at +0.84R (real, measured). You still decide and place the trade.
-
-Scoring (max ~7):
-  +2  in uptrend  (price above the 50-EMA)
-  +2  pullback zone (RSI 30-45 — the dip we buy)
-  +1  RSI turning back up (momentum returning)
-  +1  volume > 1.3x its 20-bar average (real buying interest)
-  +1  its sector is trending up
-  -1  RSI > 60 (already extended, the dip has passed)
-
+0-100 FIT SCORE (higher = better match to the dip-in-uptrend edge):
+  Trend        25  price above its 50-EMA (uptrend), not over-extended
+  Dip / RSI    30  RSI near ~35 (the pullback we buy); penalised if >60 or falling
+  Turning up   15  RSI ticking back up (momentum returning)
+  Volume       15  above-average buying interest
+  Sector       10  its sector is trending up
+  Regime        5  broad market (SPY) healthy
+Bands: 75+ strong fit · 60-74 good · 45-59 watch · <45 weak.
 A name that also meets our strict live-alert trigger is flagged ★ FIRING.
 
 Run:  python rank_today.py
@@ -28,61 +26,93 @@ import pandas as pd
 import yfinance as yf
 import scanner as s
 
-TOP_N = 8
+TOP_N = 10
 
 
-def _score_ticker(ticker: str):
-    """Return a dict with the current fit score, or None if no data."""
-    try:
-        # prepost=True so pre-/after-hours bars show up (you trade extended
-        # hours on Trade Republic, so this keeps prices as current as possible).
-        df = yf.download(ticker, period=s.LOOKBACK, interval=s.INTERVAL,
-                         progress=False, auto_adjust=False, prepost=s.EXTENDED_HOURS)
-    except Exception:
-        return None
+def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy):
+    """Blend the validated factors into a single 0-100 fit score + reason tags."""
+    dist = (price / ema_val - 1) * 100 if ema_val else 0.0
+    reasons = []
+
+    # Trend (0-25): reward uptrend, fade as it gets over-extended above the EMA.
+    if price > ema_val:
+        trend = max(10.0, min(25.0, 25.0 - max(0.0, dist - 6.0) * 1.5))
+        reasons.append("uptrend")
+    else:
+        trend = max(0.0, min(10.0, 10.0 + dist))   # dist is negative here
+        reasons.append("below trend")
+
+    # Dip / RSI zone (0-30): peaks at RSI ~35, penalises extended AND falling-knife.
+    rsi_s = max(0.0, 30.0 - abs(rsi_now - 35.0) * 1.2)
+    if 30 <= rsi_now <= 45:
+        reasons.append("dip zone")
+    elif rsi_now > 60:
+        reasons.append("extended")
+
+    # RSI turning back up (0-15).
+    if rsi_now > rsi_prev:
+        turn = min(15.0, (rsi_now - rsi_prev) * 3.0)
+        reasons.append("turning up")
+    else:
+        turn = 0.0
+
+    # Volume (0-15): above-average buying interest.
+    vol = min(15.0, max(0.0, (vol_ratio - 0.8) * 15.0))
+    if vol_ratio >= 1.3:
+        reasons.append(f"vol {vol_ratio:.1f}x")
+
+    # Sector (0-10) and market regime (0-5).
+    if sec_strong is True:
+        sec = 10.0; reasons.append("sector↑")
+    elif sec_strong is False:
+        sec = 0.0
+    else:
+        sec = 5.0
+    reg = 5.0 if healthy else 0.0
+
+    total = trend + rsi_s + turn + vol + sec + reg
+    parts = {"Trend": (trend, 25), "Dip/RSI": (rsi_s, 30), "Turning up": (turn, 15),
+             "Volume": (vol, 15), "Sector": (sec, 10), "Regime": (reg, 5)}
+
+    # Honesty penalties — the two things that break the 'dip in UPTREND' thesis:
+    if price <= ema_val:
+        total *= 0.80                       # counter-trend bounce = higher risk
+        reasons.append("counter-trend risk")
+    if rsi_now > 60:
+        total -= (rsi_now - 60) * 1.8       # extended: the dip already passed
+
+    return int(round(max(0.0, min(100.0, total)))), reasons, parts
+
+
+def _score_from_df(ticker, df, healthy):
+    """Compute the fit row for one ticker from its already-downloaded frame."""
     if df is None or len(df) < s.EMA_TREND + 5:
         return None
     if isinstance(df.columns, pd.MultiIndex):
+        df = df.copy()
         df.columns = df.columns.get_level_values(0)
+    if "Close" not in df or df["Close"].dropna().empty:
+        return None
 
-    df["EMA"] = s.ema(df["Close"], s.EMA_TREND)
-    df["RSI"] = s.rsi(df["Close"], s.RSI_LEN)
-    last, prev = df.iloc[-1], df.iloc[-2]
-    price   = float(last["Close"])
-    ema_val = float(last["EMA"])
-    rsi_now = float(last["RSI"])
-    rsi_prev = float(prev["RSI"])
+    df = df.dropna(subset=["Close"])
+    ema_ser = s.ema(df["Close"], s.EMA_TREND)
+    rsi_ser = s.rsi(df["Close"], s.RSI_LEN)
+    price    = float(df["Close"].iloc[-1])
+    ema_val  = float(ema_ser.iloc[-1])
+    rsi_now  = float(rsi_ser.iloc[-1])
+    rsi_prev = float(rsi_ser.iloc[-2])
 
     try:
         recent_vol = float(df["Volume"].iloc[-21:-1].mean())
-        vol_ratio = float(last["Volume"]) / recent_vol if recent_vol > 0 else 1.0
+        vol_ratio = float(df["Volume"].iloc[-1]) / recent_vol if recent_vol > 0 else 1.0
     except Exception:
         vol_ratio = 1.0
 
-    in_uptrend = price > ema_val
     sec_strong = s.sector_is_strong(ticker)
+    score, reasons, parts = _score_100(price, ema_val, rsi_now, rsi_prev,
+                                       vol_ratio, sec_strong, healthy)
+    firing = bool(price > ema_val and rsi_prev <= s.RSI_OVERSOLD and rsi_now > rsi_prev)
 
-    score = 0.0
-    reasons = []
-    if in_uptrend:
-        score += 2; reasons.append("uptrend")
-    else:
-        reasons.append("below trend")
-    if 30 <= rsi_now <= 45:
-        score += 2; reasons.append("dip zone")
-    if rsi_now > rsi_prev:
-        score += 1; reasons.append("turning up")
-    if vol_ratio > 1.3:
-        score += 1; reasons.append(f"vol {vol_ratio:.1f}x")
-    if sec_strong:
-        score += 1; reasons.append("sector↑")
-    if rsi_now > 60:
-        score -= 1; reasons.append("extended")
-
-    # Does it also meet the strict live trigger right now?
-    firing = bool(in_uptrend and rsi_prev <= s.RSI_OVERSOLD and rsi_now > rsi_prev)
-
-    # Timestamp of the newest candle we used (how fresh this price is).
     try:
         ts = df.index[-1]
         as_of = ts.tz_convert("Europe/Berlin") if ts.tzinfo else ts
@@ -90,27 +120,88 @@ def _score_ticker(ticker: str):
         as_of = None
 
     return {
-        "ticker": ticker,
-        "score": score,
-        "price": price,
-        "currency": s.ticker_currency(ticker),
-        "rsi": rsi_now,
-        "vol_ratio": vol_ratio,
-        "uptrend": in_uptrend,
-        "sector_strong": sec_strong,
-        "firing": firing,
-        "as_of": as_of,
-        "reasons": reasons,
+        "ticker": ticker, "score": score, "price": price,
+        "currency": s.ticker_currency(ticker), "rsi": rsi_now,
+        "vol_ratio": vol_ratio, "uptrend": price > ema_val,
+        "sector_strong": sec_strong, "firing": firing,
+        "as_of": as_of, "reasons": reasons, "parts": parts,
     }
 
 
-def rank(top_n: int = TOP_N):
-    """Score the whole watchlist and return the top_n by fit, best first."""
+def score_one(ticker: str, healthy=None) -> str:
+    """Detailed 0-100 breakdown for a single ticker (any symbol you type)."""
+    ticker = ticker.strip().upper()
+    if not ticker:
+        return "Usage: /score SYM   (e.g. /score NVDA or /score SAP.DE)"
+    if healthy is None:
+        healthy = s.market_is_healthy()
+    try:
+        df = yf.download(ticker, period=s.LOOKBACK, interval=s.INTERVAL,
+                         progress=False, auto_adjust=False, prepost=s.EXTENDED_HOURS)
+    except Exception:
+        df = None
+    r = _score_from_df(ticker, df, healthy)
+    if not r:
+        return (f"❌ No usable data for <b>{ticker}</b>. Check the symbol "
+                f"(EU names need a suffix like .DE .AS .PA .L .F).")
+
+    nm = s.name_for(ticker)
+    title = ticker + (f" · {nm}" if nm else "")
+    cur = r["currency"]
+
+    # ATR-based reference stop/target (same rules the alerts use).
+    stop_line = ""
+    try:
+        d2 = df.copy()
+        if isinstance(d2.columns, pd.MultiIndex):
+            d2.columns = d2.columns.get_level_values(0)
+        atr_val = float(s.atr(d2, s.ATR_LEN).iloc[-1])
+        stop = r["price"] - s.ATR_STOP_MULT * atr_val
+        target = r["price"] + s.RR_TARGET * (r["price"] - stop)
+        stop_pct = (stop - r["price"]) / r["price"] * 100
+        tgt_pct = (target - r["price"]) / r["price"] * 100
+        stop_line = (f"\n🛑 Ref. stop {stop:.2f} {cur} ({stop_pct:+.1f}%) · "
+                     f"🎯 target {target:.2f} {cur} ({tgt_pct:+.1f}%, {s.RR_TARGET:.0f}R)")
+    except Exception:
+        pass
+
+    breakdown = "\n".join(
+        f"   {k:<11} {v:>4.0f}/{mx}" for k, (v, mx) in r["parts"].items()
+    )
+    star = " ★FIRING" if r["firing"] else ""
+    fresh = _freshness_line([r])
+    return (
+        f"🔎 <b>{title}</b> — <b>{r['score']}/100</b> {_band(r['score'])}{star}\n"
+        f"{fresh}\n\n"
+        f"Price <b>{r['price']:.2f} {cur}</b> · RSI {r['rsi']:.0f} · "
+        f"{'uptrend' if r['uptrend'] else 'below trend'} · vol {r['vol_ratio']:.1f}×"
+        f"{stop_line}\n\n"
+        f"<b>Score breakdown</b>\n<pre>{breakdown}</pre>\n"
+        f"{(' · '.join(r['reasons']))}\n\n"
+        f"<i>0-100 = fit to our validated dip-in-uptrend edge NOW — not a price "
+        f"prediction. You decide. Not financial advice.</i>"
+    )
+
+
+def rank(top_n: int = TOP_N, healthy=None):
+    """Batch-scan the wide universe and return the top_n by 0-100 fit score."""
+    if healthy is None:
+        healthy = s.market_is_healthy()
+    universe = s.rank_universe()
+    try:
+        data = yf.download(universe, period=s.LOOKBACK, interval=s.INTERVAL,
+                           progress=False, auto_adjust=False,
+                           prepost=s.EXTENDED_HOURS, group_by="ticker", threads=True)
+    except Exception:
+        data = None
+
     rows = []
-    for t in s.WATCHLIST:
-        if t in ("SPY", "QQQ"):   # index ETFs are context, not picks
-            continue
-        r = _score_ticker(t)
+    for t in universe:
+        try:
+            df = data[t] if data is not None else None
+        except Exception:
+            df = None
+        r = _score_from_df(t, df, healthy)
         if r:
             rows.append(r)
     rows.sort(key=lambda x: (x["score"], x["vol_ratio"]), reverse=True)
@@ -158,9 +249,19 @@ def _freshness_line(rows) -> str:
     return f"📈 Data as of <b>{when}</b> · {label}"
 
 
+def _band(score: int) -> str:
+    if score >= 75:
+        return "🟢 strong fit"
+    if score >= 60:
+        return "🟢 good fit"
+    if score >= 45:
+        return "🟡 watch"
+    return "⚪ weak fit"
+
+
 def format_ranking(rows, healthy: bool = True) -> str:
     lines = ["👑 <b>King Stocks — best-qualified setups now</b>",
-             f"<i>Asked: {_stamp()}</i>"]
+             f"<i>Asked: {_stamp()} · scanned {len(s.rank_universe())} stocks</i>"]
     fresh = _freshness_line(rows)
     if fresh:
         lines.append(fresh)
@@ -173,21 +274,21 @@ def format_ranking(rows, healthy: bool = True) -> str:
         nm = s.name_for(r["ticker"])
         title = f"{r['ticker']}" + (f" · {nm}" if nm else "")
         lines.append(
-            f"{i}. <b>{title}</b>  score {r['score']:.0f}{star}\n"
+            f"{i}. <b>{title}</b> — <b>{r['score']}/100</b> {_band(r['score'])}{star}\n"
             f"   {r['price']:.2f} {r['currency']} · RSI {r['rsi']:.0f} · "
             + " · ".join(r["reasons"])
         )
     lines.append(
-        "\n<i>Ranking of CURRENT fit to our validated rules — NOT a prediction. "
-        "★FIRING = also meets the strict live trigger. You decide, you place the "
-        "trade. Not financial advice.</i>"
+        "\n<i>0-100 = fit to our validated dip-in-uptrend edge RIGHT NOW — NOT a "
+        "prediction of price. ★FIRING = also meets the strict live trigger. "
+        "You decide and place the trade. Not financial advice.</i>"
     )
     return "\n".join(lines)
 
 
 def run(send: bool = False, top_n: int = TOP_N):
     healthy = s.market_is_healthy()
-    rows = rank(top_n)
+    rows = rank(top_n, healthy=healthy)
     text = format_ranking(rows, healthy)
     if send:
         s.send_telegram(text)

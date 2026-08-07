@@ -159,6 +159,16 @@ NAMES = {
     "SPG": "Simon Property", "O": "Realty Income", "NEE": "NextEra Energy",
     "DUK": "Duke Energy", "SO": "Southern Co", "D": "Dominion", "AEP": "American Electric",
     "EXC": "Exelon",
+    # trimmed names (shown in /rank as higher-risk opportunities)
+    "IREN": "IREN", "IONQ": "IonQ", "QBTS": "D-Wave", "RGTI": "Rigetti",
+    "NVTS": "Navitas", "CRML": "Critical Metals", "RCAT": "Red Cat",
+    "SNEX": "StoneX", "NBIS": "Nebius", "RBRK": "Rubrik", "ALAB": "Astera Labs",
+    "SPCX": "SpaceX", "XK4.F": "Gabler Group", "SSIT.L": "Seraphim Space",
+    "RPI.L": "Raspberry Pi", "SMHN.DE": "SÜSS MicroTec", "GXI.DE": "Gerresheimer",
+    "MUX.DE": "Mutares", "SDF.DE": "K+S", "CRWV": "CoreWeave", "SHOP": "Shopify",
+    "ZS": "Zscaler", "TEAM": "Atlassian", "UPST": "Upstart", "PODD": "Insulet",
+    "RDDT": "Reddit", "HOOD": "Robinhood", "SOFI": "SoFi", "TTD": "The Trade Desk",
+    "HPE": "HP Enterprise", "DDOG": "Datadog",
 }
 
 
@@ -373,6 +383,57 @@ SECTOR_MAP = {
     "XOM": "Energy", "CVX": "Energy", "SHELL.AS": "Energy",
     "SIE.DE": "Industrials", "AIR.DE": "Industrials",
 }
+
+# Example constituents per sector (liquid US large-caps, all buyable on Trade
+# Republic). Used for the /sector drill-down AND to widen the /rank universe so
+# it surfaces opportunities beyond your personal watchlist.
+SECTOR_HOLDINGS = {
+    "Technology":       ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "AMD"],
+    "Comm. Services":   ["GOOGL", "META", "NFLX", "DIS", "TMUS", "VZ"],
+    "Consumer Disc.":   ["AMZN", "TSLA", "HD", "MCD", "NKE", "BKNG"],
+    "Consumer Staples": ["WMT", "COST", "PG", "KO", "PEP", "PM"],
+    "Energy":           ["XOM", "CVX", "COP", "SLB", "EOG", "WMB"],
+    "Financials":       ["JPM", "BAC", "WFC", "GS", "MS", "V"],
+    "Health Care":      ["LLY", "UNH", "JNJ", "ABBV", "MRK", "TMO"],
+    "Industrials":      ["GE", "CAT", "HON", "UNP", "BA", "RTX"],
+    "Materials":        ["LIN", "SHW", "FCX", "NEM", "APD", "ECL"],
+    "Real Estate":      ["PLD", "AMT", "EQIX", "WELL", "SPG", "O"],
+    "Utilities":        ["NEE", "DUK", "SO", "D", "AEP", "EXC"],
+}
+
+# Make sure every constituent has a sector mapping (for conviction/scoring).
+for _sec, _tks in SECTOR_HOLDINGS.items():
+    for _tk in _tks:
+        SECTOR_MAP.setdefault(_tk, _sec)
+
+# Previously-trimmed names — kept OUT of the live scan/watchlist (liquidity /
+# volatility / data-quality reasons) but INCLUDED in the /rank universe so you
+# still see them as opportunities. Higher risk; scoring penalties apply as usual.
+TRIMMED = [
+    # thin / small-cap / speculative
+    "IREN", "IONQ", "QBTS", "RGTI", "NVTS", "CRML", "RCAT", "SNEX", "NBIS",
+    "RBRK", "ALAB", "SPCX", "XK4.F", "SSIT.L", "RPI.L", "SMHN.DE", "GXI.DE",
+    "MUX.DE", "SDF.DE",
+    # liquid but choppy / whipsaw-prone
+    "CRWV", "SHOP", "ZS", "TEAM", "UPST", "PODD", "RDDT", "HOOD", "SOFI",
+    "TTD", "HPE", "DDOG",
+]
+
+
+def rank_universe():
+    """Watchlist (minus index ETFs) + sector constituents + trimmed names,
+    de-duplicated. This is the pool /rank analyses — the widest opportunity set."""
+    seen, out = set(), []
+    pool = (list(WATCHLIST)
+            + [x for v in SECTOR_HOLDINGS.values() for x in v]
+            + list(TRIMMED))
+    for t in pool:
+        if t in ("SPY", "QQQ"):
+            continue
+        if t not in seen:
+            seen.add(t); out.append(t)
+    return out
+
 
 _sector_cache = {"data": None}
 
