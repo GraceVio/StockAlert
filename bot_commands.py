@@ -25,6 +25,7 @@ import os
 import requests
 import scanner as s
 import rank_today as rk
+import backtest as bt
 
 TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = str(os.environ.get("TELEGRAM_CHAT_ID", ""))
@@ -35,6 +36,7 @@ HELP = (
     "/rank — 👑 King Stocks: best-qualified setups right now\n"
     "/scan — run the dip-in-uptrend scan now\n"
     "/sector — 📊 sector strength ranking\n"
+    "/backtest — 📈 how the strategy performed (~60d)\n"
     "/help — this message\n\n"
     "<i>Nothing here predicts prices. All rules-based. You decide.</i>"
 )
@@ -98,6 +100,10 @@ def handle(cmd: str):
         return _do_scan()
     if cmd == "/sector":
         return _do_sector()
+    if cmd == "/backtest":
+        _reply("📈 Backtesting the whole watchlist… this takes a minute.")
+        bt.run(send=True)
+        return None
     if cmd in ("/help", "/start"):
         return HELP
     return None  # ignore non-commands silently

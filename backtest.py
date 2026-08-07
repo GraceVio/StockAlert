@@ -100,11 +100,11 @@ def simulate_ticker(ticker: str):
     return trades
 
 
-def summarize(all_trades):
+def build_summary(all_trades) -> str:
+    """Return the Telegram-formatted results text (or a 'no trades' note)."""
     n = len(all_trades)
     if n == 0:
-        print("\nNo trades generated in the sample. Try loosening RSI_OVERSOLD.")
-        return
+        return "No trades generated in the sample. Try loosening RSI_OVERSOLD."
 
     wins   = [t for t in all_trades if t > 0]
     losses = [t for t in all_trades if t < 0]
@@ -128,7 +128,7 @@ def summarize(all_trades):
         "negative expectancy on this sample — needs tuning before use"
     )
 
-    summary = (
+    return (
         "<b>📈 Backtest results</b> (recent ~60d, 15m)\n\n"
         f"Trades: <b>{n}</b>\n"
         f"Win rate: <b>{win_rate:.1f}%</b> ({len(wins)}W / {len(losses)}L)\n"
@@ -141,6 +141,20 @@ def summarize(all_trades):
         "<i>Small recent sample; live runs worse. Not financial advice.</i>"
     )
 
+
+def run(send: bool = True) -> str:
+    """Backtest the whole watchlist, return the summary text (and optionally send)."""
+    all_trades = []
+    for ticker in WATCHLIST:
+        all_trades.extend(simulate_ticker(ticker))
+    summary = build_summary(all_trades)
+    if send:
+        s.send_telegram(summary)
+    return summary
+
+
+def summarize(all_trades):
+    summary = build_summary(all_trades)
     # console (ASCII-safe) + Telegram
     print("\n" + summary.replace("<b>", "").replace("</b>", "")
                         .replace("<i>", "").replace("</i>", "")
