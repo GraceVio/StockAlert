@@ -1,27 +1,28 @@
 """
 Telegram command handler — lets YOU type commands in the chat
 -------------------------------------------------------------
-Runs on a short GitHub Actions cron (every few minutes). Each run:
-  1. asks Telegram for any new messages (getUpdates),
-  2. processes commands ONLY from your own chat id (everyone else is ignored),
-  3. replies, then acknowledges the updates so they aren't handled twice.
+Two run modes:
 
-Because it acknowledges the offset back to Telegram at the end, no state file
-is needed — Telegram itself holds the queue between runs.
+  LOOP mode (default, used in the cloud):  python bot_commands.py
+    Stays running and LONG-POLLS Telegram — replies the instant you type.
+    Runs until POLL_SECONDS elapses (default ~5h40m), then exits so the next
+    scheduled job takes over. This is what gives near-instant replies.
+
+  ONCE mode (manual / fallback):           python bot_commands.py --once
+    One pass: fetch pending messages, reply, acknowledge, exit.
+
+Both process commands ONLY from your own chat id.
 
 SECURITY: it answers ONLY TELEGRAM_CHAT_ID. Any message from any other user is
 logged and dropped. There is no way for a stranger to drive your bot.
 
-Commands:
-  /rank      → King Stocks: best-qualified setups right now (live)
-  /scan      → run the dip-in-uptrend scan now and send any firing setups
-  /sector    → sector strength ranking (the heatmap, as text)
-  /help      → list commands
-
-Run (locally, one pass):  python bot_commands.py
+Commands: /rank /scan /sector /backtest /watchlist /add /remove /status /help
 """
 
 import os
+import sys
+import time
+import subprocess
 import requests
 import datetime as dt
 from zoneinfo import ZoneInfo
@@ -98,6 +99,19 @@ def _valid_ticker(sym: str) -> bool:
         return False
 
 
+def _persist_watchlist():
+    """Commit watchlist.txt back to the repo (only when running in Actions)."""
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+    try:
+        subprocess.run(["git", "add", "watchlist.txt"], check=False)
+        subprocess.run(["git", "commit", "-m", "Update watchlist via Telegram"],
+                       check=False)
+        subprocess.run(["git", "push"], check=False)
+    except Exception as e:
+        print(f"watchlist persist failed: {e}")
+
+
 def _do_add(sym: str):
     sym = sym.strip().upper()
     if not sym:
@@ -110,6 +124,7 @@ def _do_add(sym: str):
                 f"(EU names need a suffix like .DE .AS .PA .L .F).")
     with open(s.WATCHLIST_FILE, "a", encoding="utf-8") as f:
         f.write(f"{sym}\n")
+    _persist_watchlist()
     return (f"➕ Added <b>{sym}</b>. Watchlist now {len(wl)+1} tickers.\n"
             f"<i>Saved to GitHub — active from the next scan.</i>")
 
@@ -129,6 +144,7 @@ def _do_remove(sym: str):
             if ln.strip().upper() != sym or ln.strip().startswith("#")]
     with open(s.WATCHLIST_FILE, "w", encoding="utf-8") as f:
         f.writelines(kept)
+    _persist_watchlist()
     return (f"➖ Removed <b>{sym}</b>. Watchlist now {len(wl)-1} tickers.\n"
             f"<i>Saved to GitHub — active from the next scan.</i>")
 
@@ -195,15 +211,8 @@ def handle(text: str):
     return None  # ignore non-commands silently
 
 
-def main():
-    if not TOKEN or not CHAT_ID:
-        print("!! TELEGRAM_TOKEN / CHAT_ID not set.")
-        return
-    updates = _get_updates()
-    if not updates:
-        print("No new messages.")
-        return
-
+def _process(updates):
+    """Handle a batch of updates. Return the last update_id seen (or None)."""
     last_id = None
     for u in updates:
         last_id = u["update_id"]
@@ -221,12 +230,53 @@ def main():
         reply = handle(text)
         if reply:
             _reply(reply)
+    return last_id
 
-    # Acknowledge everything we just read so it isn't reprocessed next run.
+
+def main():
+    """ONCE mode: single pass, then acknowledge and exit."""
+    if not TOKEN or not CHAT_ID:
+        print("!! TELEGRAM_TOKEN / CHAT_ID not set.")
+        return
+    updates = _get_updates()
+    if not updates:
+        print("No new messages.")
+        return
+    last_id = _process(updates)
     if last_id is not None:
-        _get_updates(offset=last_id + 1)
+        _get_updates(offset=last_id + 1)  # acknowledge
     print("Done.")
 
 
+def poll_loop():
+    """LOOP mode: long-poll Telegram and reply instantly until the time budget ends."""
+    if not TOKEN or not CHAT_ID:
+        print("!! TELEGRAM_TOKEN / CHAT_ID not set.")
+        return
+    budget = int(os.environ.get("POLL_SECONDS", "20400"))  # ~5h40m default
+    start = time.time()
+    offset = None
+    print(f"Long-poll loop starting (budget {budget}s). Waiting for commands…")
+    while time.time() - start < budget:
+        try:
+            params = {"timeout": 50}
+            if offset is not None:
+                params["offset"] = offset
+            r = requests.get(f"{API}/getUpdates", params=params, timeout=70)
+            updates = r.json().get("result", []) if r.status_code == 200 else []
+        except Exception as e:
+            print(f"poll error: {e}")
+            time.sleep(3)
+            continue
+        if updates:
+            last_id = _process(updates)
+            if last_id is not None:
+                offset = last_id + 1
+    print("Time budget reached — exiting so the next job takes over.")
+
+
 if __name__ == "__main__":
-    main()
+    if "--once" in sys.argv or os.environ.get("RUN_MODE") == "once":
+        main()
+    else:
+        poll_loop()
