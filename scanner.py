@@ -126,6 +126,47 @@ EUR_SUFFIXES = (".DE", ".AS", ".PA", ".MI", ".MC", ".F", ".BR", ".VI", ".LS", ".
 GBP_SUFFIXES = (".L",)
 
 
+# Human-readable company names (shown next to tickers so you know what you're
+# looking at when you open Trade Republic). Covers the watchlist + sector names.
+NAMES = {
+    "SPY": "S&P 500 ETF", "QQQ": "Nasdaq 100 ETF",
+    "NVDA": "Nvidia", "AAPL": "Apple", "MSFT": "Microsoft", "AMZN": "Amazon",
+    "GOOGL": "Alphabet (Google)", "META": "Meta", "AVGO": "Broadcom",
+    "TSM": "TSMC", "AMD": "AMD", "QCOM": "Qualcomm", "MU": "Micron",
+    "ORCL": "Oracle", "CRM": "Salesforce", "ADBE": "Adobe", "NOW": "ServiceNow",
+    "INTU": "Intuit", "NFLX": "Netflix", "TSLA": "Tesla", "PLTR": "Palantir",
+    "IBM": "IBM", "DELL": "Dell", "ARM": "Arm Holdings", "MRVL": "Marvell",
+    "INTC": "Intel", "LLY": "Eli Lilly", "NVO": "Novo Nordisk", "KO": "Coca-Cola",
+    "PEP": "PepsiCo", "COST": "Costco", "WMT": "Walmart", "MCD": "McDonald's",
+    "V": "Visa", "MA": "Mastercard", "JPM": "JPMorgan", "UNH": "UnitedHealth",
+    "HD": "Home Depot", "XOM": "ExxonMobil", "CVX": "Chevron",
+    "BSX": "Boston Scientific", "JD": "JD.com", "FICO": "Fair Isaac",
+    "SAP.DE": "SAP", "SIE.DE": "Siemens", "ASML.AS": "ASML", "AIR.DE": "Airbus",
+    "ALV.DE": "Allianz", "DTE.DE": "Deutsche Telekom", "IFX.DE": "Infineon",
+    "SHELL.AS": "Shell", "MC.PA": "LVMH", "OR.PA": "L'Oréal", "BY6.F": "BYD",
+    # extra sector-drilldown names
+    "DIS": "Disney", "TMUS": "T-Mobile US", "VZ": "Verizon", "NKE": "Nike",
+    "BKNG": "Booking", "PG": "Procter & Gamble", "PM": "Philip Morris",
+    "COP": "ConocoPhillips", "SLB": "Schlumberger", "EOG": "EOG Resources",
+    "WMB": "Williams", "BAC": "Bank of America", "WFC": "Wells Fargo",
+    "GS": "Goldman Sachs", "MS": "Morgan Stanley", "JNJ": "Johnson & Johnson",
+    "ABBV": "AbbVie", "MRK": "Merck", "TMO": "Thermo Fisher", "GE": "GE Aerospace",
+    "CAT": "Caterpillar", "HON": "Honeywell", "UNP": "Union Pacific",
+    "BA": "Boeing", "RTX": "RTX (Raytheon)", "LIN": "Linde",
+    "SHW": "Sherwin-Williams", "FCX": "Freeport-McMoRan", "NEM": "Newmont",
+    "APD": "Air Products", "ECL": "Ecolab", "PLD": "Prologis",
+    "AMT": "American Tower", "EQIX": "Equinix", "WELL": "Welltower",
+    "SPG": "Simon Property", "O": "Realty Income", "NEE": "NextEra Energy",
+    "DUK": "Duke Energy", "SO": "Southern Co", "D": "Dominion", "AEP": "American Electric",
+    "EXC": "Exelon",
+}
+
+
+def name_for(ticker: str) -> str:
+    """Company name for a ticker, or '' if unknown."""
+    return NAMES.get(ticker.upper(), "")
+
+
 def ticker_currency(ticker: str) -> str:
     t = ticker.upper()
     if t.endswith(EUR_SUFFIXES):
@@ -598,8 +639,10 @@ def _size_line(a: dict) -> str:
 
 def format_alert(a: dict) -> str:
     cur = a["currency"]
+    nm = name_for(a["ticker"])
+    title = f"{a['ticker']}" + (f" · {nm}" if nm else "")
     head = (
-        f"🔔 <b>{a['ticker']}</b> long setup ({INTERVAL})\n"
+        f"🔔 <b>{title}</b> long setup ({INTERVAL})\n"
         f"Buy-the-dip in uptrend · RSI turned up from {a['rsi_prev']:.0f} → {a['rsi_now']:.0f}\n\n"
         f"Entry ~ <b>{a['price']:.2f} {cur}</b>"
     )

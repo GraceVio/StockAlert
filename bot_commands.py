@@ -149,26 +149,30 @@ def _sector_table(only_tf=None):
     if only_tf:
         rows.sort(key=lambda r: (r["tf"].get(only_tf) is None,
                                  -(r["tf"].get(only_tf) or 0)))
-        body = [f"{'Sector':<12}{only_tf:>7}"]
+        body = [f"{'Sector':<10}{only_tf:>7}  50d"]
         for r in rows:
-            star = "*" if r["strong"] else " "
-            body.append(f"{(r['name'][:11]):<11}{star}{_cell(r['tf'].get(only_tf)):>7}")
-        return (f"📊 <b>Sector momentum — {only_tf}</b> (%, extended hours)\n"
-                "<pre>" + "\n".join(body) + "</pre>"
-                "\n<code>*</code> = above 50-day avg. <i>Context, not a prediction.</i>")
+            trend = "up" if r["strong"] else "dn"
+            short = _SECTOR_SHORT.get(r["name"], r["name"])[:9]
+            body.append(f"{short:<10}{_cell(r['tf'].get(only_tf)):>7}  {trend}")
+        return (f"📊 <b>Sector momentum — {only_tf}</b>\n"
+                "<i>%, live extended hours</i>\n"
+                "<pre>" + "\n".join(body) + "</pre>\n"
+                "<i>50d = above/below 50-day trend.</i>")
 
     rows.sort(key=lambda r: (r["tf"].get("24h") is None, -(r["tf"].get("24h") or 0)))
-    body = [f"{'Sector':<11}{'1h':>6}{'2h':>6}{'4h':>6}{'24h':>6}"]
+    body = [f"{'Sector':<10}{'1h':>6}{'4h':>6}{'24h':>6}  50d"]
     for r in rows:
-        star = "*" if r["strong"] else " "
+        trend = "up" if r["strong"] else "dn"
+        short = _SECTOR_SHORT.get(r["name"], r["name"])[:9]
         body.append(
-            f"{(r['name'][:10]):<10}{star}"
-            f"{_cell(r['tf'].get('1h')):>6}{_cell(r['tf'].get('2h')):>6}"
-            f"{_cell(r['tf'].get('4h')):>6}{_cell(r['tf'].get('24h')):>6}"
+            f"{short:<10}"
+            f"{_cell(r['tf'].get('1h')):>6}"
+            f"{_cell(r['tf'].get('4h')):>6}{_cell(r['tf'].get('24h')):>6}  {trend}"
         )
-    return ("📊 <b>Sector momentum</b> (%, extended hours)\n"
-            "<pre>" + "\n".join(body) + "</pre>"
-            "\n<code>*</code> = above 50-day avg. <i>Context, not a prediction.</i>")
+    return ("📊 <b>Sector momentum</b>\n"
+            "<i>%, live extended hours</i>\n"
+            "<pre>" + "\n".join(body) + "</pre>\n"
+            "<i>Tap one timeframe to also see 2h. 50d = 50-day trend.</i>")
 
 
 def _sector_stocks(name):
@@ -191,28 +195,33 @@ def _sector_stocks(name):
             last = float(dc.iloc[-1])
             ema50 = float(dc.ewm(span=50, adjust=False).mean().iloc[-1])
             up = last > ema50
-            vavg = float(dv.iloc[-21:-1].mean())
-            volr = float(dv.iloc[-1]) / vavg if vavg > 0 else 1.0
+            # Average daily volume in millions (stable liquidity measure — not
+            # distorted by partial pre-market bars like a same-day ratio is).
+            vol_m = float(dv.iloc[-21:-1].mean()) / 1e6
             hc = h[t]["Close"].dropna()
             ch24 = _pct(hc.iloc[-1], hc.iloc[-17]) if len(hc) >= 17 else _pct(dc.iloc[-1], dc.iloc[-2])
             price = float(hc.iloc[-1]) if len(hc) else last
         except Exception:
             continue
-        rows.append({"t": t, "price": price, "ch24": ch24, "volr": volr, "up": up})
+        rows.append({"t": t, "price": price, "ch24": ch24, "vol_m": vol_m, "up": up})
 
     if not rows:
         return f"No data for {name} stocks right now."
-    rows.sort(key=lambda r: r["volr"], reverse=True)   # most active first
+    rows.sort(key=lambda r: r["vol_m"], reverse=True)   # most-traded first
 
-    body = [f"{'Stock':<7}{'24h':>7}{'vol':>7}  trend"]
-    for r in rows:
-        arrow = "up" if r["up"] else "dn"
-        body.append(f"{r['t']:<7}{_cell(r['ch24']):>7}{r['volr']:>6.1f}x   {arrow}")
-    return (f"📈 <b>{name} — stocks by volume &amp; trend</b>\n"
-            "<pre>" + "\n".join(body) + "</pre>"
-            "\nSorted by <b>trade volume</b> (activity). "
-            "<code>up/dn</code> = above/below 50-day trend. 24h = extended hours.\n"
-            "<i>Context, not a prediction.</i>")
+    lines = [f"📈 <b>{name} — most traded</b>",
+             "<i>by avg daily volume · 24h = live extended hours</i>", ""]
+    for i, r in enumerate(rows, 1):
+        nm = s.name_for(r["t"])
+        trend = "🟢 uptrend" if r["up"] else "🔴 downtrend"
+        lines.append(
+            f"{i}. <b>{r['t']}</b> · {nm}\n"
+            f"   {r['price']:.2f} · 24h {_cell(r['ch24'])}% · "
+            f"vol {r['vol_m']:.0f}M · {trend}"
+        )
+    lines.append("\n<i>Sorted by trade volume (liquidity). Trend = vs 50-day. "
+                 "Context, not a prediction.</i>")
+    return "\n".join(lines)
 
 
 def _sector_menu_markup():

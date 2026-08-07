@@ -170,8 +170,10 @@ def format_ranking(rows, healthy: bool = True) -> str:
     lines.append("")
     for i, r in enumerate(rows, 1):
         star = " ★FIRING" if r["firing"] else ""
+        nm = s.name_for(r["ticker"])
+        title = f"{r['ticker']}" + (f" · {nm}" if nm else "")
         lines.append(
-            f"{i}. <b>{r['ticker']}</b>  score {r['score']:.0f}{star}\n"
+            f"{i}. <b>{title}</b>  score {r['score']:.0f}{star}\n"
             f"   {r['price']:.2f} {r['currency']} · RSI {r['rsi']:.0f} · "
             + " · ".join(r["reasons"])
         )
