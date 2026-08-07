@@ -1,20 +1,30 @@
 name: Telegram Commands
 
-# Polls Telegram for your commands (/rank, /scan, /sector, /help) and replies.
-# Runs every 5 minutes during market-relevant hours. GitHub's minimum cron
-# granularity is ~5 minutes, so expect up to a few minutes' delay after you type.
+# Instant replies: each run STAYS ALIVE and long-polls Telegram, answering the
+# moment you type. A job runs up to ~6h, so a few staggered starts cover the
+# whole trading day. `concurrency` guarantees only ONE poller runs at a time
+# (two would clash on Telegram's getUpdates), and a fresh start cancels the old
+# one for a clean hand-off. Free because the repo is public (unlimited minutes).
 on:
   schedule:
-    - cron: "*/5 6-21 * * 1-5"   # every 5 min, 08:00-23:00 CET (your trading hours)
+    # Starts at 08:00, 13:00, 18:00, 23:00 CET (06/11/16/21 UTC), Mon-Fri.
+    # Each run lives ~5h40m, so coverage overlaps with no gaps.
+    - cron: "0 6,11,16,21 * * 1-5"
   workflow_dispatch:
 
 # Needed so /add and /remove can save watchlist.txt back to the repo.
 permissions:
   contents: write
 
+# Only one poller alive at a time; a new start replaces the running one.
+concurrency:
+  group: telegram-poller
+  cancel-in-progress: true
+
 jobs:
   commands:
     runs-on: ubuntu-latest
+    timeout-minutes: 350          # safety cap (job hard-limit is 360)
     steps:
       - uses: actions/checkout@v4
 
@@ -26,16 +36,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Handle commands
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python bot_commands.py
-
-      - name: Save watchlist edits (if any)
+      - name: Configure git (so /add and /remove can save the watchlist)
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-          git add watchlist.txt || true
-          git commit -m "Update watchlist via Telegram" || echo "No watchlist change"
-          git push || echo "Nothing to push"
+
+      - name: Run command poller (long-poll, instant replies)
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          POLL_SECONDS: "20400"   # ~5h40m, then exits before the 350-min cap
+        run: python bot_commands.py
