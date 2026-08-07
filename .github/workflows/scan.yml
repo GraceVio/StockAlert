@@ -1,11 +1,13 @@
 name: Stock Alert Scan
 
-# Runs every 15 minutes during US + European market hours (UTC), weekdays.
-# Xetra ~06:00-14:30 UTC (summer) · NYSE ~13:30-20:00 UTC (summer).
 on:
   schedule:
     - cron: "*/15 6-20 * * 1-5"
-  workflow_dispatch:   # lets you run it manually from the Actions tab to test
+  workflow_dispatch:
+
+# Needed so the bot can save alerts_log.csv back to the repo.
+permissions:
+  contents: write
 
 jobs:
   scan:
@@ -25,3 +27,11 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scanner.py
+
+      - name: Save alert log (if any new alerts)
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add alerts_log.csv || true
+          git commit -m "Update alert log" || echo "No new alerts to log"
+          git push || echo "Nothing to push"
