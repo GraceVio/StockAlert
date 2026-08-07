@@ -22,6 +22,7 @@ Commands: /rank /scan /sector /backtest /watchlist /add /remove /status /help
 import os
 import sys
 import time
+import json
 import subprocess
 import requests
 import datetime as dt
@@ -66,19 +67,183 @@ def _reply(text):
     s.send_telegram(text)  # already targets TELEGRAM_CHAT_ID
 
 
-def _do_sector():
-    """Text version of the sector heatmap."""
-    data = s.get_sector_strength()
-    if not data:
+def _pct(a, b):
+    try:
+        return (float(a) - float(b)) / float(b) * 100
+    except Exception:
+        return None
+
+
+def _cell(v):
+    return f"{v:+.1f}" if v is not None else "  -"
+
+
+# Example constituents per sector (liquid names), for the drill-down view.
+SECTOR_HOLDINGS = {
+    "Technology":       ["AAPL", "MSFT", "NVDA", "AVGO", "ORCL", "AMD"],
+    "Comm. Services":   ["GOOGL", "META", "NFLX", "DIS", "TMUS", "VZ"],
+    "Consumer Disc.":   ["AMZN", "TSLA", "HD", "MCD", "NKE", "BKNG"],
+    "Consumer Staples": ["WMT", "COST", "PG", "KO", "PEP", "PM"],
+    "Energy":           ["XOM", "CVX", "COP", "SLB", "EOG", "WMB"],
+    "Financials":       ["JPM", "BAC", "WFC", "GS", "MS", "V"],
+    "Health Care":      ["LLY", "UNH", "JNJ", "ABBV", "MRK", "TMO"],
+    "Industrials":      ["GE", "CAT", "HON", "UNP", "BA", "RTX"],
+    "Materials":        ["LIN", "SHW", "FCX", "NEM", "APD", "ECL"],
+    "Real Estate":      ["PLD", "AMT", "EQIX", "WELL", "SPG", "O"],
+    "Utilities":        ["NEE", "DUK", "SO", "D", "AEP", "EXC"],
+}
+
+# Short display labels for the sector buttons (callback carries the full name).
+_SECTOR_SHORT = {
+    "Technology": "Tech", "Comm. Services": "Comm", "Consumer Disc.": "Cons.Disc",
+    "Consumer Staples": "Staples", "Energy": "Energy", "Financials": "Financials",
+    "Health Care": "Health", "Industrials": "Industry", "Materials": "Materials",
+    "Real Estate": "RealEst", "Utilities": "Utilities",
+}
+
+
+def _send_menu(text, markup):
+    """Send a message with inline buttons."""
+    try:
+        requests.post(f"{API}/sendMessage", data={
+            "chat_id": CHAT_ID, "text": text, "parse_mode": "HTML",
+            "reply_markup": json.dumps(markup),
+        }, timeout=20)
+    except Exception as e:
+        print(f"menu send failed: {e}")
+
+
+def _sector_rows():
+    """Fetch sector ETF momentum (1h/2h/4h/24h) + 50-day strength, extended hours."""
+    etfs = list(s.SECTOR_ETFS.items())
+    tickers = [e for _, e in etfs]
+    try:
+        h = yf.download(tickers, period="7d", interval="60m", progress=False,
+                        auto_adjust=False, prepost=True, group_by="ticker")
+    except Exception:
+        h = None
+    monthly = s.get_sector_strength()
+    rows = []
+    for name, etf in etfs:
+        tf = {}
+        try:
+            c = h[etf]["Close"].dropna()
+            tf["1h"]  = _pct(c.iloc[-1], c.iloc[-2])  if len(c) >= 2  else None
+            tf["2h"]  = _pct(c.iloc[-1], c.iloc[-3])  if len(c) >= 3  else None
+            tf["4h"]  = _pct(c.iloc[-1], c.iloc[-5])  if len(c) >= 5  else None
+            tf["24h"] = _pct(c.iloc[-1], c.iloc[-17]) if len(c) >= 17 else None
+        except Exception:
+            pass
+        m = monthly.get(name, {})
+        rows.append({"name": name, "tf": tf,
+                     "strong": m.get("strong"), "month": m.get("month")})
+    return rows
+
+
+def _sector_table(only_tf=None):
+    """Full 4-column table, or a single-timeframe ranked list if only_tf given."""
+    rows = _sector_rows()
+    if not any(r["tf"] for r in rows):
         return "Sector data unavailable right now — try again shortly."
-    rows = sorted(data.items(), key=lambda kv: kv[1]["month"], reverse=True)
-    lines = ["📊 <b>Sector strength</b> (1-month trend)", ""]
-    for name, d in rows:
-        mark = "🟢" if d["strong"] else "🔴"
-        lines.append(f"{mark} {name}: {d['month']:+.1f}%  "
-                     f"({'above' if d['strong'] else 'below'} 50-day)")
-    lines.append("\n<i>Green = above its 50-day average. Context, not a prediction.</i>")
-    return "\n".join(lines)
+
+    if only_tf:
+        rows.sort(key=lambda r: (r["tf"].get(only_tf) is None,
+                                 -(r["tf"].get(only_tf) or 0)))
+        body = [f"{'Sector':<12}{only_tf:>7}"]
+        for r in rows:
+            star = "*" if r["strong"] else " "
+            body.append(f"{(r['name'][:11]):<11}{star}{_cell(r['tf'].get(only_tf)):>7}")
+        return (f"📊 <b>Sector momentum — {only_tf}</b> (%, extended hours)\n"
+                "<pre>" + "\n".join(body) + "</pre>"
+                "\n<code>*</code> = above 50-day avg. <i>Context, not a prediction.</i>")
+
+    rows.sort(key=lambda r: (r["tf"].get("24h") is None, -(r["tf"].get("24h") or 0)))
+    body = [f"{'Sector':<11}{'1h':>6}{'2h':>6}{'4h':>6}{'24h':>6}"]
+    for r in rows:
+        star = "*" if r["strong"] else " "
+        body.append(
+            f"{(r['name'][:10]):<10}{star}"
+            f"{_cell(r['tf'].get('1h')):>6}{_cell(r['tf'].get('2h')):>6}"
+            f"{_cell(r['tf'].get('4h')):>6}{_cell(r['tf'].get('24h')):>6}"
+        )
+    return ("📊 <b>Sector momentum</b> (%, extended hours)\n"
+            "<pre>" + "\n".join(body) + "</pre>"
+            "\n<code>*</code> = above 50-day avg. <i>Context, not a prediction.</i>")
+
+
+def _sector_stocks(name):
+    """Top stocks in a sector, ranked by trade volume, with 24h trend."""
+    tickers = SECTOR_HOLDINGS.get(name)
+    if not tickers:
+        return f"No stock list for {name}."
+    try:
+        d = yf.download(tickers, period="1mo", interval="1d", progress=False,
+                        auto_adjust=False, group_by="ticker")
+        h = yf.download(tickers, period="7d", interval="60m", progress=False,
+                        auto_adjust=False, prepost=True, group_by="ticker")
+    except Exception:
+        return "Data unavailable right now — try again shortly."
+
+    rows = []
+    for t in tickers:
+        try:
+            dc = d[t]["Close"].dropna(); dv = d[t]["Volume"].dropna()
+            last = float(dc.iloc[-1])
+            ema50 = float(dc.ewm(span=50, adjust=False).mean().iloc[-1])
+            up = last > ema50
+            vavg = float(dv.iloc[-21:-1].mean())
+            volr = float(dv.iloc[-1]) / vavg if vavg > 0 else 1.0
+            hc = h[t]["Close"].dropna()
+            ch24 = _pct(hc.iloc[-1], hc.iloc[-17]) if len(hc) >= 17 else _pct(dc.iloc[-1], dc.iloc[-2])
+            price = float(hc.iloc[-1]) if len(hc) else last
+        except Exception:
+            continue
+        rows.append({"t": t, "price": price, "ch24": ch24, "volr": volr, "up": up})
+
+    if not rows:
+        return f"No data for {name} stocks right now."
+    rows.sort(key=lambda r: r["volr"], reverse=True)   # most active first
+
+    body = [f"{'Stock':<7}{'24h':>7}{'vol':>7}  trend"]
+    for r in rows:
+        arrow = "up" if r["up"] else "dn"
+        body.append(f"{r['t']:<7}{_cell(r['ch24']):>7}{r['volr']:>6.1f}x   {arrow}")
+    return (f"📈 <b>{name} — stocks by volume &amp; trend</b>\n"
+            "<pre>" + "\n".join(body) + "</pre>"
+            "\nSorted by <b>trade volume</b> (activity). "
+            "<code>up/dn</code> = above/below 50-day trend. 24h = extended hours.\n"
+            "<i>Context, not a prediction.</i>")
+
+
+def _sector_menu_markup():
+    tf_row = [{"text": t, "callback_data": f"sec_tf|{t}"}
+              for t in ("1h", "2h", "4h", "24h")]
+    overview = [{"text": "📊 All timeframes", "callback_data": "sec_tf|all"}]
+    sector_btns = [{"text": _SECTOR_SHORT[n], "callback_data": f"sec_st|{n}"}
+                   for n in SECTOR_HOLDINGS]
+    sector_rows = [sector_btns[i:i + 3] for i in range(0, len(sector_btns), 3)]
+    return {"inline_keyboard": [tf_row, overview] + sector_rows}
+
+
+def _do_sector():
+    """Send the interactive sector menu (buttons handled via callbacks)."""
+    _send_menu(
+        "📊 <b>Sector view</b>\n"
+        "• Tap a <b>timeframe</b> for the momentum ranking\n"
+        "• Tap a <b>sector</b> to see its stocks by volume &amp; trend",
+        _sector_menu_markup(),
+    )
+    return None
+
+
+def handle_callback(data):
+    """React to an inline-button tap."""
+    if data.startswith("sec_tf|"):
+        tf = data.split("|", 1)[1]
+        _reply(_sector_table(None if tf == "all" else tf))
+    elif data.startswith("sec_st|"):
+        name = data.split("|", 1)[1]
+        _reply(_sector_stocks(name))
 
 
 def _do_watchlist():
@@ -216,6 +381,24 @@ def _process(updates):
     last_id = None
     for u in updates:
         last_id = u["update_id"]
+
+        # Inline-button taps arrive as callback queries.
+        cq = u.get("callback_query")
+        if cq:
+            try:
+                requests.post(f"{API}/answerCallbackQuery",
+                              data={"callback_query_id": cq["id"]}, timeout=10)
+            except Exception:
+                pass
+            frm = str(cq.get("from", {}).get("id", ""))
+            if frm != CHAT_ID:
+                print(f"Ignored callback from foreign id {frm}")
+                continue
+            data = cq.get("data", "")
+            print(f"Handling callback: {data!r}")
+            handle_callback(data)
+            continue
+
         msg = u.get("message") or u.get("edited_message")
         if not msg:
             continue
