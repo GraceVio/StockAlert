@@ -39,7 +39,7 @@ API     = f"https://api.telegram.org/bot{TOKEN}"
 HELP = (
     "🤖 <b>Commands</b>\n"
     "/rank — 👑 King Stocks: best-qualified setups right now\n"
-    "/score SYM — 🔎 fit score (0-100) for one stock\n"
+    "/score SYM [SYM …] — 🔎 fit score (0-100), up to 5 stocks\n"
     "/scan — run the dip-in-uptrend scan now\n"
     "/sector — 📊 sector strength ranking\n"
     "/backtest — 📈 how the strategy performed (~60d)\n"
@@ -360,10 +360,14 @@ def handle(text: str):
         rk.run(send=True)
         return None
     if cmd == "/score":
-        if not arg:
-            return "Usage: /score SYM   (e.g. /score NVDA or /score SAP.DE)"
-        _reply(f"🔎 Scoring {arg.upper()}… one moment.")
-        return rk.score_one(arg)
+        syms = [p.upper() for p in parts[1:] if p.strip()][:5]  # cap at 5
+        if not syms:
+            return "Usage: /score SYM [SYM …]   (e.g. /score NVDA TSLA AMD)"
+        _reply(f"🔎 Scoring {', '.join(syms)}… one moment.")
+        healthy = s.market_is_healthy()          # compute once for the batch
+        for sym in syms:
+            _reply(rk.score_one(sym, healthy=healthy))
+        return None
     if cmd == "/scan":
         _reply("🔍 Scanning now… one moment.")
         return _do_scan()
