@@ -1,0 +1,28 @@
+name: Event Digest
+
+# Sends the earnings + macro (CPI/FOMC/GDP/PCE/Jobs) digest to Telegram each
+# weekday morning, and can be run manually any time.
+on:
+  schedule:
+    - cron: "0 6 * * 1-5"      # 08:00 CET, Mon-Fri
+  workflow_dispatch:
+
+jobs:
+  events:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Send event digest
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python events.py
