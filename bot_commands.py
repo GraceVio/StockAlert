@@ -31,6 +31,7 @@ import yfinance as yf
 import scanner as s
 import rank_today as rk
 import backtest as bt
+import events as ev
 
 TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = str(os.environ.get("TELEGRAM_CHAT_ID", ""))
@@ -42,6 +43,8 @@ HELP = (
     "/score SYM [SYM …] — 🔎 fit score (0-100), up to 5 stocks\n"
     "/scan — run the dip-in-uptrend scan now\n"
     "/sector — 📊 sector strength ranking\n"
+    "/earnings — 📅 watchlist earnings, next 7 days\n"
+    "/macro — 🏦 CPI/Fed/GDP events, next 7 days\n"
     "/backtest — 📈 how the strategy performed (~60d)\n"
     "/watchlist — 📋 show tracked tickers\n"
     "/add SYM — ➕ add a ticker (e.g. /add NVDA)\n"
@@ -373,6 +376,11 @@ def handle(text: str):
         return _do_scan()
     if cmd == "/sector":
         return _do_sector()
+    if cmd == "/earnings":
+        _reply("📅 Checking earnings dates… one moment.")
+        return ev.earnings_text()
+    if cmd == "/macro":
+        return ev.macro_text()
     if cmd == "/backtest":
         _reply("📈 Backtesting the whole watchlist… this takes a minute.")
         bt.run(send=True)
