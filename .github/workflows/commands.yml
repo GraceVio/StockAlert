@@ -7,9 +7,10 @@ name: Telegram Commands
 # one for a clean hand-off. Free because the repo is public (unlimited minutes).
 on:
   schedule:
-    # Starts at 08:00, 13:00, 18:00, 23:00 CET (06/11/16/21 UTC), Mon-Fri.
-    # Each run lives ~5h40m, so coverage overlaps with no gaps.
-    - cron: "0 6,11,16,21 * * 1-5"
+    # Every hour, 06-21 UTC (08:00-23:00 CET), Mon-Fri. GitHub often SKIPS
+    # individual scheduled triggers, so we fire hourly: if one is skipped the
+    # next hour restarts the listener. concurrency (below) keeps just one alive.
+    - cron: "0 6-21 * * 1-5"
   workflow_dispatch:
 
 # Needed so /add and /remove can save watchlist.txt back to the repo.
