@@ -1,0 +1,39 @@
+name: Cleanup old runs
+
+# Keeps the Actions history tidy: deletes COMPLETED workflow runs older than a
+# few days, across every workflow in the repo. Runs overnight while the poller
+# is asleep. In-progress runs (the live bot, this cleanup itself) are never
+# touched because we only ask the API for status=completed runs.
+on:
+  schedule:
+    - cron: "30 3 * * *"     # daily 03:30 UTC (~05:30 CET, bot asleep)
+  workflow_dispatch:
+
+permissions:
+  actions: write             # required to delete workflow runs
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete completed runs older than 3 days
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KEEP_DAYS: "2"      # change to keep more/less history
+        run: |
+          CUTOFF=$(date -d "${KEEP_DAYS} days ago" +%s)
+          echo "Deleting completed runs created before $(date -d @${CUTOFF} -u)"
+          deleted=0
+          gh api --paginate "/repos/${GH_REPO}/actions/runs?status=completed&per_page=100" \
+            --jq '.workflow_runs[] | "\(.id) \(.created_at)"' \
+          | while read -r id created; do
+              ts=$(date -d "$created" +%s)
+              if [ "$ts" -lt "$CUTOFF" ]; then
+                if gh api -X DELETE "/repos/${GH_REPO}/actions/runs/${id}" >/dev/null 2>&1; then
+                  echo "  deleted run ${id} (${created})"
+                  deleted=$((deleted + 1))
+                fi
+              fi
+            done
+          echo "Cleanup done."
