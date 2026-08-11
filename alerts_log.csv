@@ -1,0 +1,2 @@
+timestamp_utc,ticker,currency,entry,stop,target,stop_pct,target_pct,rsi_prev,rsi_now,days_to_earnings
+2026-08-11T21:28:17,HD,USD,354.0100,350.3887,361.2526,-1.02,2.05,28.0,50.0,
