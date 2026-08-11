@@ -55,6 +55,36 @@ HELP = (
 )
 
 
+# The list Telegram shows when you type "/" in the chat. Registered on startup
+# via setMyCommands, so the menu always matches the handlers below. Descriptions
+# must be plain text (no HTML/emoji markup), 1-256 chars.
+COMMAND_MENU = [
+    ("rank",      "King Stocks — best setups right now"),
+    ("score",     "Fit score 0-100 for a stock (e.g. NVDA)"),
+    ("scan",      "Run the dip-in-uptrend scan now"),
+    ("sector",    "Sector strength ranking"),
+    ("earnings",  "Watchlist earnings, next 7 days"),
+    ("macro",     "CPI / Fed / GDP events, next 7 days"),
+    ("backtest",  "How the strategy performed (~60d)"),
+    ("watchlist", "Show tracked tickers"),
+    ("add",       "Add a ticker (e.g. /add NVDA)"),
+    ("remove",    "Remove a ticker (e.g. /remove INTC)"),
+    ("status",    "Is the bot alive & market regime"),
+    ("help",      "Show all commands"),
+]
+
+
+def _register_commands():
+    """Tell Telegram the command list so typing '/' shows a menu."""
+    try:
+        cmds = [{"command": c, "description": d} for c, d in COMMAND_MENU]
+        r = requests.post(f"{API}/setMyCommands",
+                          data={"commands": json.dumps(cmds)}, timeout=15)
+        print("Command menu registered." if r.ok else f"setMyCommands failed: {r.text}")
+    except Exception as e:
+        print(f"setMyCommands error: {e}")
+
+
 def _get_updates(offset=None):
     params = {"timeout": 0}
     if offset is not None:
@@ -435,6 +465,7 @@ def main():
     if not TOKEN or not CHAT_ID:
         print("!! TELEGRAM_TOKEN / CHAT_ID not set.")
         return
+    _register_commands()  # keep the "/" menu in sync
     updates = _get_updates()
     if not updates:
         print("No new messages.")
@@ -450,6 +481,7 @@ def poll_loop():
     if not TOKEN or not CHAT_ID:
         print("!! TELEGRAM_TOKEN / CHAT_ID not set.")
         return
+    _register_commands()  # keep the "/" menu in sync
     budget = int(os.environ.get("POLL_SECONDS", "20400"))  # ~5h40m default
     start = time.time()
     offset = None
