@@ -7,15 +7,23 @@ name: Telegram Commands
 # one for a clean hand-off. Free because the repo is public (unlimited minutes).
 on:
   schedule:
-    # Every hour, 06-21 UTC (08:00-23:00 CET), Mon-Fri. GitHub often SKIPS
-    # individual scheduled triggers, so we fire hourly: if one is skipped the
-    # next hour restarts the listener. concurrency (below) keeps just one alive.
-    - cron: "0 6-21 * * 1-5"
+    # The poller now RE-LAUNCHES ITSELF (see the last step), so we no longer
+    # need frequent scheduling. These crons are just "seeds": a morning wake-up
+    # plus a couple of daytime backups in case the self-chain ever breaks or a
+    # trigger is skipped. concurrency (below) keeps only ONE poller alive.
+    #
+    # Times are UTC (GitHub cron has no timezone). 06:00 CET = 04:00 UTC in
+    # summer / 05:00 UTC in winter, so we fire both to cover the morning wake-up.
+    - cron: "0 4,5 * * 1-5"     # morning wake-up (~06:00 CET), Mon-Fri
+    - cron: "0 10,16 * * 1-5"   # daytime backup seeds (~12:00 / 18:00 CET)
   workflow_dispatch:
 
-# Needed so /add and /remove can save watchlist.txt back to the repo.
+# contents: write -> /add and /remove can save watchlist.txt back to the repo.
+# actions:  write -> the poller re-launches ITSELF at the end (self-chaining),
+#                    so it no longer depends on GitHub's flaky scheduled runs.
 permissions:
   contents: write
+  actions: write
 
 # Only one poller alive at a time; a new start replaces the running one.
 concurrency:
@@ -27,6 +35,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350          # safety cap (job hard-limit is 360)
     steps:
+      - name: Record start time (crash-loop guard)
+        run: echo "STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
@@ -48,3 +59,36 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           POLL_SECONDS: "20400"   # ~5h40m, then exits before the 350-min cap
         run: python bot_commands.py
+
+      # Self-chaining: as soon as this run ends (normally OR on error), launch a
+      # fresh one. This is what keeps the bot ALWAYS alive — no dependency on
+      # GitHub's scheduler, which was skipping the hourly restarts and leaving
+      # the bot dead for hours. `if: always()` covers crashes and the time cap.
+      #
+      # Uses CHAIN_TOKEN (a Personal Access Token) if you set it, because the
+      # built-in GITHUB_TOKEN is BLOCKED from starting new workflow runs (GitHub
+      # blocks that to prevent loops). Without CHAIN_TOKEN the chain won't fire
+      # and you fall back to the hourly cron.
+      - name: Re-launch the poller for continuous coverage
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CHAIN_TOKEN || github.token }}
+        run: |
+          # Overnight OFF: only keep the chain alive during the active window.
+          # If it's now before 06:00 CET, stop — the morning cron will re-seed.
+          HOUR_CET=$(TZ="Europe/Berlin" date +%H)
+          if [ "$((10#$HOUR_CET))" -lt 6 ]; then
+            echo "It's ${HOUR_CET}:xx CET (overnight). Not relaunching — morning cron will restart at 06:00."
+            exit 0
+          fi
+
+          # Crash-loop guard: if this run lasted < 2 min it probably crashed on
+          # startup. Wait before relaunching so we don't spin runs endlessly.
+          ELAPSED=$(( $(date +%s) - ${STARTED_AT:-0} ))
+          if [ "$ELAPSED" -lt 120 ]; then
+            echo "Ran only ${ELAPSED}s — likely a crash. Throttling 5 min before relaunch."
+            sleep 300
+          fi
+          gh workflow run commands.yml --ref "${GITHUB_REF_NAME}" \
+            && echo "Re-launched next poller run." \
+            || echo "Could not self-relaunch (need CHAIN_TOKEN PAT). Cron is the fallback."
