@@ -528,13 +528,12 @@ def _volatility_banner() -> str:
 
 
 def _band(score: int) -> str:
-    if score >= 75:
-        return "🟢 strong fit"
+    # Just the colored dot — the score number already conveys the strength.
     if score >= 60:
-        return "🟢 good fit"
+        return "🟢"
     if score >= 45:
-        return "🟡 watch"
-    return "⚪ weak fit"
+        return "🟡"
+    return "⚪"
 
 
 def format_ranking(rows, healthy: bool = True) -> str:
