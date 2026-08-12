@@ -180,6 +180,19 @@ def load_macro():
     return uniq
 
 
+def high_impact_today():
+    """Name of a 🔴 high-impact macro event scheduled TODAY, else None."""
+    today = _today()
+    for e in load_macro():
+        try:
+            d = dt.date.fromisoformat(e["date"])
+        except Exception:
+            continue
+        if d == today and macro_meta(e["name"])[0] == "High":
+            return e["name"]
+    return None
+
+
 def upcoming_macro(days=MACRO_LOOKAHEAD):
     today = _today()
     horizon = today + dt.timedelta(days=days)

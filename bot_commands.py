@@ -50,6 +50,7 @@ HELP = (
     "/news — 🌍 market news · /news SYM 📰 for one stock\n"
     "/backtest — 📈 how the strategy performed (~60d)\n"
     "/account — 💼 show/set account size (for position sizing)\n"
+    "/mode — ⏱ fast (hours) or normal (days) target\n"
     "/watchlist — 📋 show tracked tickers\n"
     "/add SYM — ➕ add a ticker (e.g. /add NVDA)\n"
     "/remove SYM — ➖ remove a ticker\n"
@@ -73,6 +74,7 @@ COMMAND_MENU = [
     ("news",      "Market news, or /news SYM for a stock"),
     ("backtest",  "How the strategy performed (~60d)"),
     ("account",   "Show/set account size for sizing"),
+    ("mode",      "Fast (hours) or normal (days) target"),
     ("watchlist", "Show tracked tickers"),
     ("add",       "Add a ticker (e.g. /add NVDA)"),
     ("remove",    "Remove a ticker (e.g. /remove INTC)"),
@@ -397,6 +399,26 @@ def _do_account(arg: str):
             f"<i>Resets when the bot restarts — set the ACCOUNT_EUR secret to keep it.</i>")
 
 
+def _do_mode(arg: str):
+    """Show or set the trade mode (fast vs normal) — changes target/horizon only."""
+    cur = s.load_mode()
+    if not arg:
+        return (f"⏱ <b>Trade mode: {cur}</b>\n\n"
+                f"• <b>fast</b> — {s.RR_FAST:g}R target, hours–2 days "
+                f"(higher win-rate, quick trades)\n"
+                f"• <b>normal</b> — {s.RR_TARGET:g}R target, days–weeks "
+                f"(bigger winners)\n\n"
+                f"<i>Same ranking either way — only the target &amp; hold time change.</i>\n"
+                f"Switch: <code>/mode fast</code> or <code>/mode normal</code>")
+    a = arg.strip().lower()
+    if a not in ("fast", "normal"):
+        return "Usage: /mode fast   or   /mode normal"
+    s.save_mode(a)
+    rr = s.RR_FAST if a == "fast" else s.RR_TARGET
+    return (f"✅ Trade mode set to <b>{a}</b> — {rr:g}R target, aim to exit within "
+            f"{s.mode_horizon()}.\n<i>Resets on restart unless you set a TRADE_MODE secret.</i>")
+
+
 def _do_status():
     now = dt.datetime.now(ZoneInfo("Europe/Berlin")).strftime("%d %b %Y, %H:%M CET")
     wl = s.load_watchlist()
@@ -445,6 +467,8 @@ def handle(text: str):
         return _do_find(" ".join(parts[1:]))
     if cmd == "/account":
         return _do_account(arg)
+    if cmd == "/mode":
+        return _do_mode(arg)
     if cmd == "/rank":
         _reply("👑 Analysing the watchlist live… one moment.")
         rk.run(send=True)

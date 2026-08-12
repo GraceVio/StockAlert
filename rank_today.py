@@ -32,96 +32,111 @@ TOP_N = 10
 
 
 def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy,
-               above_vwap=None, support_dist=None, rel_strength=None):
-    """Blend the validated factors into a single 0-100 fit score + reason tags.
+               vwap_state=None, rel_strength=None, support_bonus=0.0,
+               support_tag=None):
+    """Score = validated dip-in-uptrend CORE (0-80) + quality ENHANCERS (0-20).
 
-    Weights (total 100): Trend 20 · Dip/RSI 25 · Turning up 10 · Volume 10 ·
-    VWAP 10 · Support 10 · Rel.strength 10 · Sector 3 · Regime 2.
-    The three new factors (VWAP, support, rel.strength) raise the quality bar so
-    the top of the list is a dip in a *leader*, near support, that big money backs
-    — not just any stock that dipped today."""
+    CORE (the edge that worked): Trend 22 · Dip/RSI 30 · Turning-up 14 · Volume 8
+    · Sector 3 · Regime 3.
+    ENHANCERS (add-only — never knock a good dip out, just lift the excellent
+    ones): At-tested-support +9 · Above-VWAP +6 · Rel.strength +5.  Weights set
+    from the backtest: support was the strongest factor, VWAP helped, relative
+    strength barely moved outcomes.
+    Adjustments are smooth (no cliffs): an over-extended RSI is trimmed, and a
+    below-trend price gets a GRADUAL counter-trend haircut (bigger the further
+    below), so scores don't jump when price grazes the trend line."""
     dist = (price / ema_val - 1) * 100 if ema_val else 0.0
     reasons = []
 
-    # Trend (0-20): reward uptrend, fade as it gets over-extended above the EMA.
+    # ---------------- CORE edge (0-80) ----------------
+    # Trend (0-22): reward uptrend, fade as it gets over-extended above the EMA.
     if price > ema_val:
-        trend = max(8.0, min(20.0, 20.0 - max(0.0, dist - 6.0) * 1.3))
+        trend = max(9.0, min(22.0, 22.0 - max(0.0, dist - 6.0) * 1.4))
         reasons.append("uptrend")
     else:
-        trend = max(0.0, min(8.0, 8.0 + dist))     # dist is negative here
+        trend = max(0.0, min(9.0, 9.0 + dist))     # dist is negative here
         reasons.append("below trend")
 
-    # Dip / RSI zone (0-25): peaks at RSI ~35, penalises extended AND falling-knife.
-    rsi_s = max(0.0, 25.0 - abs(rsi_now - 35.0) * 1.0)
+    # Dip / RSI zone (0-30): peaks at RSI ~35, fades for extended/falling-knife.
+    rsi_s = max(0.0, 30.0 - abs(rsi_now - 35.0) * 1.2)
     if 30 <= rsi_now <= 45:
         reasons.append("dip zone")
     elif rsi_now > 60:
         reasons.append("extended")
 
-    # RSI turning back up (0-10).
+    # RSI turning back up (0-14).
     if rsi_now > rsi_prev:
-        turn = min(10.0, (rsi_now - rsi_prev) * 2.5)
+        turn = min(14.0, (rsi_now - rsi_prev) * 3.0)
         reasons.append("turning up")
     else:
         turn = 0.0
 
-    # Volume (0-10): above-average buying interest confirms the bounce.
-    vol = min(10.0, max(0.0, (vol_ratio - 0.8) * 10.0))
+    # Volume (0-8): above-average buying interest confirms the bounce.
+    vol = min(8.0, max(0.0, (vol_ratio - 0.8) * 8.0))
     if vol_ratio >= 1.3:
         reasons.append(f"vol {vol_ratio:.1f}x")
 
-    # VWAP (0-10): is price above the price big investors are averaged into?
-    if above_vwap is True:
-        vwap_s = 10.0; reasons.append("above VWAP")
-    elif above_vwap is False:
-        vwap_s = 3.0; reasons.append("below VWAP")
-    else:
-        vwap_s = 5.0
-
-    # Support (0-10): a dip landing NEAR a support floor is a higher-quality entry.
-    if support_dist is None:
-        sup = 5.0
-    elif support_dist <= 3:
-        sup = 10.0; reasons.append("near support")
-    elif support_dist <= 6:
-        sup = 7.0
-    elif support_dist <= 10:
-        sup = 4.0
-    else:
-        sup = 2.0                          # lots of air below = more downside room
-
-    # Relative strength (0-10): leaders (beating the market) get the money flows.
-    if rel_strength is None:
-        rs = 5.0
-    elif rel_strength >= 5:
-        rs = 10.0; reasons.append("market leader")
-    elif rel_strength >= 0:
-        rs = 7.0
-    elif rel_strength >= -5:
-        rs = 4.0
-    else:
-        rs = 1.0; reasons.append("lagging market")
-
-    # Sector (0-3) and market regime (0-2).
+    # Sector (0-3) and market regime (0-3).
     if sec_strong is True:
         sec = 3.0; reasons.append("sector↑")
     elif sec_strong is False:
         sec = 0.0
     else:
         sec = 1.5
-    reg = 2.0 if healthy else 0.0
+    reg = 3.0 if healthy else 0.0
 
-    total = trend + rsi_s + turn + vol + vwap_s + sup + rs + sec + reg
-    parts = {"Trend": (trend, 20), "Dip/RSI": (rsi_s, 25), "Turning up": (turn, 10),
-             "Volume": (vol, 10), "VWAP": (vwap_s, 10), "Support": (sup, 10),
-             "Rel.strength": (rs, 10), "Sector": (sec, 3), "Regime": (reg, 2)}
+    core = trend + rsi_s + turn + vol + sec + reg          # up to 80
 
-    # Honesty penalties — the two things that break the 'dip in UPTREND' thesis:
-    if price <= ema_val:
-        total *= 0.80                       # counter-trend bounce = higher risk
-        reasons.append("counter-trend risk")
+    # -------------- ENHANCERS (0-20, add-only) --------------
+    # At a TESTED support floor (0-9): STRONGEST factor in the backtest. Bonus +
+    # timeframe tag precomputed by scanner.support_summary. Away = 0 (no penalty).
+    supp = min(9.0, support_bonus or 0.0)
+    if support_tag:
+        reasons.append(support_tag)
+
+    # VWAP state (0-6): the backtest showed the edge is being AT the VWAP line
+    # from above (a "bounce", +0.16R / 57% win), NOT merely above it. Stretched,
+    # broken-below and chop were all losers → 0 bonus + a warning tag.
+    if vwap_state == "bounce":
+        vwap_s = 6.0; reasons.append("🎯 bounce at VWAP")
+    elif vwap_state == "above":
+        vwap_s = 2.0; reasons.append("above VWAP")
+    elif vwap_state == "far_above":
+        vwap_s = 0.5; reasons.append("stretched above VWAP")
+    elif vwap_state == "broke":
+        vwap_s = 0.0; reasons.append("⚠️ broke below VWAP")
+    elif vwap_state == "chop":
+        vwap_s = 0.0; reasons.append("⚠️ chopping across VWAP")
+    elif vwap_state == "below":
+        vwap_s = 0.0; reasons.append("below VWAP")
+    else:
+        vwap_s = 2.0
+
+    # Relative strength (0-5): small weight — it barely moved outcomes in the test.
+    if rel_strength is None:
+        rs = 2.0
+    elif rel_strength >= 5:
+        rs = 5.0; reasons.append("market leader")
+    elif rel_strength >= 0:
+        rs = 3.0
+    elif rel_strength >= -5:
+        rs = 1.0
+    else:
+        rs = 0.0; reasons.append("lagging market")
+
+    total = core + supp + vwap_s + rs
+
+    # -------------- smooth honesty adjustments --------------
     if rsi_now > 60:
-        total -= (rsi_now - 60) * 1.8       # extended: the dip already passed
+        total -= (rsi_now - 60) * 1.8              # too extended: the dip passed
+    if price < ema_val and ema_val:
+        below = (ema_val - price) / ema_val * 100.0
+        total *= (1.0 - min(0.15, below * 0.03))   # gradual counter-trend haircut
+        reasons.append("counter-trend risk")
+
+    parts = {"Trend": (trend, 22), "Dip/RSI": (rsi_s, 30), "Turning up": (turn, 14),
+             "Volume": (vol, 8), "Sector": (sec, 3), "Regime": (reg, 3),
+             "Support +": (supp, 9), "VWAP +": (vwap_s, 6), "Rel.str +": (rs, 5)}
 
     return int(round(max(0.0, min(100.0, total)))), reasons, parts
 
@@ -155,8 +170,8 @@ def _score_from_df(ticker, df, healthy, ctx=None):
     sec_strong = s.sector_is_strong(ticker)
     score, reasons, parts = _score_100(
         price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy,
-        above_vwap=ctx.get("above_vwap"), support_dist=ctx.get("support_dist"),
-        rel_strength=ctx.get("rel_strength"))
+        vwap_state=ctx.get("vwap_state"), rel_strength=ctx.get("rel_strength"),
+        support_bonus=ctx.get("support_bonus", 0.0), support_tag=ctx.get("support_tag"))
     firing = bool(price > ema_val and rsi_prev <= s.RSI_OVERSOLD and rsi_now > rsi_prev)
 
     # ATR-based stop → 1%-rule position size. Prefer DAILY ATR (realistic for a
@@ -186,7 +201,9 @@ def _score_from_df(ticker, df, healthy, ctx=None):
         "as_of": as_of, "reasons": reasons, "parts": parts,
         "stop": stop, "stop_pct": stop_pct, "risk": risk,
         "vwap": ctx.get("vwap"), "above_vwap": ctx.get("above_vwap"),
+        "vwap_state": ctx.get("vwap_state"), "vwap_note": ctx.get("vwap_note"),
         "support_levels": ctx.get("support_levels"),
+        "support_tier": ctx.get("support_tier"), "support_tag": ctx.get("support_tag"),
         "support_dist": ctx.get("support_dist"), "support_touches": ctx.get("support_touches"),
         "rel_strength": ctx.get("rel_strength"),
     }
@@ -206,26 +223,39 @@ def _support_line(r) -> str:
     cur = r["currency"]
     bits = []
     sl = r.get("support_levels") or {}
-    wk, mo, mj = sl.get("weekly"), sl.get("monthly"), sl.get("major")
-    if wk or mo:
-        # headline: how close to the nearest significant (weekly) floor
-        d = r.get("support_dist")
-        if d is not None:
-            near = "🟢 at support" if d <= 3 else (
-                   "🟡 near-ish" if d <= 7 else "⚪ well above support")
-            bits.append(f"🧱 <b>Support {near}</b>")
-        bits.append(f"   • Weekly:  {_fmt_sup(wk, cur)}")
-        bits.append(f"   • Monthly: {_fmt_sup(mo, cur)}")
-        # show the big long-term floor only if it's a different, well-tested level
-        if mj and mj["touches"] >= 2 and (not mo or abs(mj["level"] - mo["level"]) / mo["level"] > 0.05):
-            bits.append(f"   • Major (most-tested): {_fmt_sup(mj, cur)}")
-    av = r.get("above_vwap")
-    if av is True:
-        bits.append("💧 Above VWAP — trading above the ~1-month volume-weighted "
-                    "average price (buyers in profit; common in an uptrend)")
-    elif av is False:
-        bits.append("💧 Below VWAP — under the ~1-month average buy price "
-                    "(recent buyers underwater — caution)")
+    sh, md, lg = sl.get("short"), sl.get("medium"), sl.get("long")
+    if sh or md or lg:
+        # headline: which timeframe's tested floor the price is AT (if any)
+        tag = r.get("support_tag")
+        if tag and tag.startswith("at ") and "weak" not in tag:
+            bits.append(f"🧱 <b>Support: 🟢 {tag}</b>")
+        elif tag and tag.startswith("near"):
+            bits.append(f"🧱 <b>Support: 🟡 {tag}</b>")
+        elif tag:
+            bits.append(f"🧱 <b>Support: {tag}</b>")
+        else:
+            bits.append("🧱 <b>Support:</b> not at a tested floor right now")
+        bits.append(f"   • Short-term (≈2mo, daily):  {_fmt_sup(sh, cur)}")
+        bits.append(f"   • Medium-term (≈9mo, daily): {_fmt_sup(md, cur)}")
+        bits.append(f"   • Long-term (≈2yr, weekly):  {_fmt_sup(lg, cur)}")
+    st = r.get("vwap_state")
+    vd = r.get("vwap_dist")
+    dtxt = f" ({vd:+.1f}%)" if vd is not None else ""
+    if st == "bounce":
+        bits.append(f"🎯 <b>Bounce at VWAP</b>{dtxt} — pulled back to fair value from "
+                    "above; prime dip-buy zone (best-performing setup)")
+    elif st == "above":
+        bits.append(f"💧 Above VWAP{dtxt} — buyers in control (but not at the line)")
+    elif st == "far_above":
+        bits.append(f"💧 Stretched above VWAP{dtxt} — rubber band; snap-back risk")
+    elif st == "broke":
+        bits.append(f"⚠️ <b>Broke below VWAP</b>{dtxt} — trend may have broken. "
+                    "AVOID even if RSI looks oversold.")
+    elif st == "chop":
+        bits.append("⚠️ <b>Chopping across VWAP</b> — directionless; likely to hit "
+                    "your stop. Best avoided.")
+    elif st == "below":
+        bits.append(f"💧 Below VWAP{dtxt} — recent buyers underwater (caution)")
     rsx = r.get("rel_strength")
     if rsx is not None:
         if rsx >= 5:
@@ -243,10 +273,13 @@ def _size_line(r) -> str:
     stop, stop_pct, rp = r.get("stop"), r.get("stop_pct"), r.get("risk")
     if stop is None or stop_pct is None:
         return ""
-    target = r["price"] + s.RR_TARGET * (r["price"] - stop)
+    rr = s.active_rr()
+    target = r["price"] + rr * (r["price"] - stop)
     tgt_pct = (target - r["price"]) / r["price"] * 100
     out = (f"\n🛑 Stop {stop:.2f} {cur} ({stop_pct:+.1f}%) · "
-           f"🎯 Target {target:.2f} {cur} ({tgt_pct:+.1f}%, {s.RR_TARGET:.0f}R)")
+           f"🎯 Target {target:.2f} {cur} ({tgt_pct:+.1f}%, {rr:g}R)"
+           f"\n⏱ <b>{s.load_mode()} mode</b> — aim to exit within {s.mode_horizon()} "
+           f"(/mode to switch)")
     if rp:
         cap = " (capped — no leverage)" if rp.get("capped") else ""
         out += (f"\n💰 Buy ≈ <b>€{rp['pos_val']:.0f}</b> (~{rp['shares']:.1f} shares){cap}\n"
@@ -269,12 +302,12 @@ def score_one(ticker: str, healthy=None) -> str:
         df = None
     # daily frame for VWAP / support / relative strength
     r0 = _score_from_df(ticker, df, healthy)
-    ctx = None
+    ctx = None; dd = None
     if r0 is not None:
         try:
-            # 5y = enough monthly pivots to find significant floors, still current
-            # regime (avoids meaningless decades-old split-adjusted lows).
-            dd = yf.download(ticker, period="5y", interval="1d",
+            # 2y — same range /rank uses, so /score and /rank give identical
+            # support tiers (short 2mo, medium 9mo, long weekly-2y).
+            dd = yf.download(ticker, period="2y", interval="1d",
                              progress=False, auto_adjust=False)
             ctx = s.daily_context(ticker, dd, r0["price"])
         except Exception:
@@ -305,14 +338,29 @@ def score_one(ticker: str, healthy=None) -> str:
     except Exception:
         news_line = ""
 
+    # Earnings break-even lens (anchored VWAP from last report). Context, not
+    # scored — its clearest signal is 'below = post-earnings move failed, avoid'.
+    eline = ""
+    try:
+        led = s.last_earnings_date(ticker)
+        if led is not None and dd is not None:
+            es = s.earnings_avwap_signal(dd, r["price"], led)
+            if es["state"] != "unknown" and es.get("avwap"):
+                pre = {"above": "🏦", "bounce": "🏦🎯", "below": "🏦⚠️"}.get(es["state"], "🏦")
+                eline = (f"\n{pre} <b>Earnings break-even</b> {es['avwap']:.2f} {cur} "
+                         f"({es['dist']:+.1f}%) — {es['note']}")
+    except Exception:
+        eline = ""
+
     return (
+        f"{_volatility_banner()}"
         f"🔎 <b>{title}</b> — <b>{r['score']}/100</b> {_band(r['score'])}{star}\n"
         f"{fresh}\n\n"
         f"Price <b>{r['price']:.2f} {cur}</b> · RSI {r['rsi']:.0f} · "
         f"{'uptrend' if r['uptrend'] else 'below trend'} · vol {r['vol_ratio']:.1f}×"
         f"{_support_line(r)}"
         f"{_size_line(r)}"
-        f"{earn}{news_line}\n\n"
+        f"{earn}{news_line}{eline}\n\n"
         f"<b>Score breakdown</b>\n<pre>{breakdown}</pre>\n"
         f"{(' · '.join(r['reasons']))}\n\n"
         f"<i>0-100 = how well this fits the dip-in-uptrend edge right now (not a "
@@ -412,6 +460,28 @@ def _freshness_line(rows) -> str:
     return f"📈 Data as of <b>{when}</b> · {label}"
 
 
+def _volatility_banner() -> str:
+    """Warn when scores are less reliable: a 🔴 macro event today, or the first
+    30 min after the US open (whippy, unsettled prices)."""
+    bits = []
+    try:
+        hi = ev.high_impact_today()
+        if hi:
+            bits.append(f"🔴 <b>{hi} today</b> — the market is digesting it.")
+    except Exception:
+        pass
+    try:
+        if s.in_us_opening():
+            bits.append("⏱ <b>First 30 min after the US open</b> — whippy, prices not settled.")
+    except Exception:
+        pass
+    if not bits:
+        return ""
+    return ("⚠️ <b>High-volatility window — scores are less reliable right now.</b>\n"
+            + "\n".join(bits)
+            + "\n<i>Better to wait ~30–60 min after the open before acting on a score.</i>\n\n")
+
+
 def _band(score: int) -> str:
     if score >= 75:
         return "🟢 strong fit"
@@ -423,8 +493,12 @@ def _band(score: int) -> str:
 
 
 def format_ranking(rows, healthy: bool = True) -> str:
-    lines = ["👑 <b>King Stocks — best-qualified setups now</b>",
-             f"<i>Asked: {_stamp()} · scanned {len(s.rank_universe())} stocks</i>"]
+    lines = []
+    banner = _volatility_banner()
+    if banner:
+        lines.append(banner.rstrip())
+    lines += ["👑 <b>King Stocks — best-qualified setups now</b>",
+              f"<i>Asked: {_stamp()} · scanned {len(s.rank_universe())} stocks</i>"]
     fresh = _freshness_line(rows)
     if fresh:
         lines.append(fresh)
@@ -438,9 +512,18 @@ def format_ranking(rows, healthy: bool = True) -> str:
         title = f"{r['ticker']}" + (f" · {nm}" if nm else "")
         # compact quality tags
         tags = []
-        if r.get("support_dist") is not None and r["support_dist"] <= 3:
-            tags.append("🧱near support")
-        if r.get("above_vwap") is True:
+        stag = r.get("support_tag") or ""
+        if stag and "weak" not in stag and (stag.startswith("at ") or stag.startswith("near")):
+            # e.g. "at medium-term support" -> "🧱 medium-term support"
+            tags.append(f"🧱 {r.get('support_tier','')} support")
+        st = r.get("vwap_state")
+        if st == "bounce":
+            tags.append("🎯VWAP bounce")
+        elif st == "broke":
+            tags.append("⚠️broke VWAP")
+        elif st == "chop":
+            tags.append("⚠️VWAP chop")
+        elif st == "above":
             tags.append("💧above VWAP")
         if r.get("rel_strength") is not None and r["rel_strength"] >= 5:
             tags.append("🏆leader")
@@ -460,8 +543,8 @@ def format_ranking(rows, healthy: bool = True) -> str:
         )
     lines.append(
         "\n<i>0-100 = entry-quality fit to the dip-in-uptrend edge right now (not a "
-        "price prediction). 🧱near support · 💧above VWAP (big money supports it) · "
-        "🏆leader (beating the market) · 📰 news lean (🟢/🔴/⚪, context only). "
+        "price prediction). 🧱 at support (tested floor) · 🎯 VWAP bounce (prime "
+        "entry) · ⚠️ broke/chop VWAP (avoid) · 🏆 leader · 📰 news lean. "
         "★FIRING = also meets the strict live trigger. "
         "💰 sizes so a stop-out risks ~{:.0f}% of your account — set it with /account.</i>"
         .format(s.RISK_PCT)

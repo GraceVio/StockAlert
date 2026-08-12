@@ -93,7 +93,8 @@ RSI_LEN           = 14
 RSI_OVERSOLD      = 35      # pullback threshold
 ATR_LEN           = 14
 ATR_STOP_MULT     = 1.5     # stop = entry - 1.5 * ATR
-RR_TARGET         = 3.0     # target = entry + 3.0 * risk (optimized 2026-08-07)
+RR_TARGET         = 3.0     # NORMAL mode target (multi-day/week holds)
+RR_FAST           = 1.5     # FAST mode target (hours–2 day holds; higher hit-rate)
 EXTENDED_HOURS    = True     # include pre-/after-market bars (you trade extended
                             # hours on Trade Republic) — keeps prices current, but
                             # off-session volume is thin so signals are a bit noisier
@@ -379,6 +380,109 @@ def anchored_vwap(df: pd.DataFrame, anchor_date) -> pd.Series:
     return pv.cumsum() / d["Volume"].cumsum()
 
 
+def vwap_signal(daily: pd.DataFrame, price: float, window: int = 20) -> dict:
+    """Classify price vs the ~1-month VWAP into one of the 'rubber band' states.
+    Returns {dist (%), above, state, note}. States:
+      bounce    — near VWAP from above → prime dip-buy zone (the good one)
+      above     — comfortably above VWAP (buyers in control)
+      far_above — stretched well above VWAP (rubber band; snap-back risk)
+      broke     — fresh drop BELOW VWAP (trend may have broken → AVOID)
+      below     — under VWAP (recent buyers underwater)
+      chop      — crossing VWAP back and forth (directionless → AVOID)
+    """
+    res = {"dist": None, "above": None, "state": "unknown", "note": ""}
+    if daily is None or len(daily) < window + 6:
+        return res
+    d = daily
+    if isinstance(d.columns, pd.MultiIndex):
+        d = d.copy(); d.columns = d.columns.get_level_values(0)
+    d = d.dropna(subset=["Close"])
+    try:
+        vw = rolling_vwap(d, window)
+        vwn = float(vw.iloc[-1])
+    except Exception:
+        return res
+    if vwn != vwn or vwn <= 0:
+        return res
+    dist = (price - vwn) / vwn * 100.0
+    res["dist"] = dist
+    res["above"] = price >= vwn
+    # close-vs-VWAP over the last ~15 bars → how many times it flipped sides
+    diff = (d["Close"].iloc[-16:-1] - vw.iloc[-16:-1]).dropna()
+    signs = [1 if x >= 0 else -1 for x in diff.values]
+    flips = sum(1 for a, b in zip(signs, signs[1:]) if a != b)
+    was_above = any(x > 0 for x in signs[-6:])
+
+    if flips >= 4:
+        res["state"] = "chop"; res["note"] = "chopping across VWAP — directionless, avoid"
+    elif dist < -2 and was_above:
+        res["state"] = "broke"; res["note"] = "broke below VWAP — trend may have broken, avoid"
+    elif dist < -1:
+        res["state"] = "below"; res["note"] = "under VWAP — recent buyers underwater"
+    elif -1 <= dist <= 3:
+        res["state"] = "bounce"; res["note"] = "at VWAP from above — prime dip-buy zone"
+    elif dist > 8:
+        res["state"] = "far_above"; res["note"] = "stretched above VWAP — snap-back risk"
+    else:
+        res["state"] = "above"; res["note"] = "above VWAP — buyers in control"
+    return res
+
+
+def earnings_avwap_signal(daily: pd.DataFrame, price: float, anchor_date) -> dict:
+    """Anchored VWAP measured from the last earnings date = the average price of
+    everyone who bought since that report (their 'break-even'). Classify price vs
+    that line. Returns {avwap, dist, state, note, anchor}. States:
+      above  — earnings buyers in profit; post-earnings trend intact
+      bounce — back at their break-even from above; they defend here (re-entry)
+      below  — earnings buyers underwater; the post-earnings move has failed
+    """
+    res = {"avwap": None, "dist": None, "state": "unknown", "note": "", "anchor": None}
+    if daily is None or anchor_date is None:
+        return res
+    d = daily
+    if isinstance(d.columns, pd.MultiIndex):
+        d = d.copy(); d.columns = d.columns.get_level_values(0)
+    d = d.dropna(subset=["Close"])
+    try:
+        a = pd.Timestamp(anchor_date)
+        if a.tzinfo is not None:
+            a = a.tz_localize(None)
+        a = a.normalize()
+        if d.index.tz is not None:
+            a = a.tz_localize(d.index.tz)
+        av = anchored_vwap(d, a)
+        avn = float(av.iloc[-1])
+    except Exception:
+        return res
+    if avn != avn or avn <= 0:
+        return res
+    dist = (price - avn) / avn * 100.0
+    res.update({"avwap": avn, "dist": dist, "anchor": a})
+    if dist < -1.5:
+        res["state"] = "below"
+        res["note"] = "below it — everyone who bought since the last earnings is underwater; the move has failed"
+    elif dist <= 3:
+        res["state"] = "bounce"
+        res["note"] = "back at it from above — the earnings buyers defend their break-even here; strong re-entry"
+    else:
+        res["state"] = "above"
+        res["note"] = "above it — the earnings buyers are in profit; post-earnings trend intact"
+    return res
+
+
+def last_earnings_date(ticker: str):
+    """Most recent PAST earnings date (to anchor the earnings VWAP), or None."""
+    try:
+        cal = yf.Ticker(ticker).get_earnings_dates(limit=24)
+        if cal is None or cal.empty:
+            return None
+        now = pd.Timestamp.now(tz=cal.index.tz)
+        past = cal.index[cal.index < now]
+        return past.max() if len(past) else None
+    except Exception:
+        return None
+
+
 # --- Real support lines: tested bounce levels on weekly / monthly timeframes ---
 # A support line is a price FLOOR the stock fell to and bounced from before — and
 # the more times it was tested, and the longer the timeframe, the more it matters.
@@ -437,12 +541,13 @@ def _strongest_support(levels, price, tol=0.04):
 
 
 def support_levels(daily: pd.DataFrame, price: float) -> dict:
-    """Support FLOORS below the price on rising timeframes:
-      weekly  — nearest tested level on the weekly chart (most responsive)
-      monthly — nearest tested level on the monthly chart (more significant)
-      major   — the most-tested long-term floor (the big one)
-    Each is {level, touches, dist} or None."""
-    out = {"weekly": None, "monthly": None, "major": None}
+    """Nearest tested support floor below the price on THREE horizons. All are
+    measured within ~2 years so /rank and /score always agree:
+      short  — daily pivots, last ~2 months  (immediate, days-to-weeks)
+      medium — daily pivots, last ~9 months   (swing structure — the main one)
+      long   — weekly pivots, last ~2 years    (major, stronger floor)
+    Each is {level, touches, dist} or None. Higher timeframe = stronger."""
+    out = {"short": None, "medium": None, "long": None}
     if daily is None or len(daily) < 40:
         return out
     d = daily
@@ -452,18 +557,53 @@ def support_levels(daily: pd.DataFrame, price: float) -> dict:
     if d.empty:
         return out
     try:
-        wk = _resample_low_close(d, "W")
-        out["weekly"] = _nearest_support(_pivot_lows(wk["Low"], 3), price)
+        out["short"] = _nearest_support(_pivot_lows(d["Low"].tail(42), 3), price)
     except Exception:
         pass
     try:
-        mo = _resample_low_close(d, "ME")
-        piv = _pivot_lows(mo["Low"], 2)
-        out["monthly"] = _nearest_support(piv, price)
-        out["major"] = _strongest_support(piv, price)
+        out["medium"] = _nearest_support(_pivot_lows(d["Low"].tail(189), 5), price)
+    except Exception:
+        pass
+    try:
+        wk = _resample_low_close(d.tail(504), "W")
+        out["long"] = _nearest_support(_pivot_lows(wk["Low"], 3), price)
     except Exception:
         pass
     return out
+
+
+# How strongly to reward being AT each horizon's tested floor (higher TF = more).
+# Weights bumped 2026-08-12 after the backtest showed at-support was the single
+# strongest factor (+0.08R vs -0.18R when not at support). (bonus_at, bonus_near)
+_SUPPORT_TIERS = [
+    ("long",   "long-term",   9.0, 4.5),
+    ("medium", "medium-term", 7.0, 3.5),
+    ("short",  "short-term",  5.0, 2.5),
+]
+
+
+def support_summary(levels: dict) -> dict:
+    """Which tested support the price is currently AT/near, across horizons.
+    Returns {bonus (0-7 for the score), tag (names the timeframe), tier, dist,
+    touches}. Prefers the strongest (higher-TF, tested) floor it qualifies for."""
+    best = {"bonus": 0.0, "tag": None, "tier": None, "dist": None, "touches": None}
+    for key, label, pts_at, pts_near in _SUPPORT_TIERS:
+        lv = (levels or {}).get(key)
+        if not lv:
+            continue
+        tested = lv["touches"] >= 2
+        if lv["dist"] <= 3 and tested:
+            cand, tag = pts_at, f"at {label} support"
+        elif lv["dist"] <= 5 and tested:
+            cand, tag = pts_near, f"near {label} support"
+        elif lv["dist"] <= 3:
+            cand, tag = 1.5, f"at weak {label} low"
+        else:
+            continue
+        if cand > best["bonus"]:
+            best = {"bonus": cand, "tag": tag, "tier": label,
+                    "dist": lv["dist"], "touches": lv["touches"]}
+    return best
 
 
 # SPY daily frame cached once per run (benchmark for relative strength).
@@ -505,7 +645,9 @@ def relative_strength(df: pd.DataFrame, lookback: int = 21):
 
 def daily_context(ticker: str, ddf: pd.DataFrame, price: float) -> dict:
     """Bundle VWAP / support / relative-strength for a ticker from its daily frame."""
-    ctx = {"vwap": None, "above_vwap": None, "support_levels": None,
+    ctx = {"vwap": None, "above_vwap": None, "vwap_state": None, "vwap_dist": None,
+           "vwap_note": None, "support_levels": None,
+           "support_bonus": 0.0, "support_tag": None, "support_tier": None,
            "support_dist": None, "support_touches": None, "rel_strength": None,
            "atr_daily": None}
     if ddf is None or len(ddf) < 20:
@@ -523,18 +665,24 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float) -> dict:
     except Exception:
         pass
     try:
-        vw = float(rolling_vwap(ddf, 20).iloc[-1])
-        if vw == vw:                       # not NaN
-            ctx["vwap"] = vw
-            ctx["above_vwap"] = price >= vw
+        sig = vwap_signal(ddf, price, 20)
+        ctx["vwap_state"] = sig["state"]
+        ctx["vwap_dist"] = sig["dist"]
+        ctx["vwap_note"] = sig["note"]
+        ctx["above_vwap"] = sig["above"]
+        if sig["dist"] is not None:
+            ctx["vwap"] = price / (1 + sig["dist"] / 100.0)
     except Exception:
         pass
     try:
         sl = support_levels(ddf, price)
         ctx["support_levels"] = sl
-        primary = sl.get("weekly") or sl.get("monthly")   # nearest significant
-        ctx["support_dist"] = primary["dist"] if primary else None
-        ctx["support_touches"] = primary["touches"] if primary else None
+        summ = support_summary(sl)
+        ctx["support_bonus"] = summ["bonus"]
+        ctx["support_tag"] = summ["tag"]
+        ctx["support_tier"] = summ["tier"]
+        ctx["support_dist"] = summ["dist"]
+        ctx["support_touches"] = summ["touches"]
     except Exception:
         pass
     try:
@@ -582,6 +730,41 @@ def load_account() -> float:
 def save_account(value: float):
     with open(ACCOUNT_FILE, "w", encoding="utf-8") as f:
         f.write(str(int(round(value))))
+
+
+# --- Trade mode: same ranking, different TARGET/horizon --------------------
+# "normal" = 3R target, days-to-weeks.  "fast" = 1.5R target, hours-to-2-days
+# (backtest: higher win-rate, fits quick trading). The score/ranking is identical
+# in both — only the target and suggested hold time change.
+MODE_FILE = "mode.txt"
+
+
+def load_mode() -> str:
+    env = os.environ.get("TRADE_MODE", "").strip().lower()
+    if env in ("fast", "normal"):
+        return env
+    try:
+        if os.path.exists(MODE_FILE):
+            m = open(MODE_FILE, "r", encoding="utf-8").read().strip().lower()
+            if m in ("fast", "normal"):
+                return m
+    except Exception:
+        pass
+    return "normal"
+
+
+def save_mode(mode: str):
+    with open(MODE_FILE, "w", encoding="utf-8") as f:
+        f.write(mode.strip().lower())
+
+
+def active_rr() -> float:
+    """Reward:risk target for the current mode."""
+    return RR_FAST if load_mode() == "fast" else RR_TARGET
+
+
+def mode_horizon() -> str:
+    return "hours–2 days" if load_mode() == "fast" else "days–weeks"
 
 
 def risk_position(price: float, currency: str, stop_pct: float,
