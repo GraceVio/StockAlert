@@ -186,25 +186,46 @@ def _score_from_df(ticker, df, healthy, ctx=None):
         "as_of": as_of, "reasons": reasons, "parts": parts,
         "stop": stop, "stop_pct": stop_pct, "risk": risk,
         "vwap": ctx.get("vwap"), "above_vwap": ctx.get("above_vwap"),
-        "support": ctx.get("support"), "support_label": ctx.get("support_label"),
-        "support_dist": ctx.get("support_dist"), "rel_strength": ctx.get("rel_strength"),
+        "support_levels": ctx.get("support_levels"),
+        "support_dist": ctx.get("support_dist"), "support_touches": ctx.get("support_touches"),
+        "rel_strength": ctx.get("rel_strength"),
     }
 
 
+def _fmt_sup(lvl_dict, cur):
+    """Format one support level: '342.35 USD · 3.4% below · tested 5×'."""
+    if not lvl_dict:
+        return "none nearby"
+    t = lvl_dict["touches"]
+    strength = f"tested {t}×" if t > 1 else "1 touch (weak)"
+    return f"{lvl_dict['level']:.2f} {cur} · {lvl_dict['dist']:.1f}% below · {strength}"
+
+
 def _support_line(r) -> str:
-    """Plain-language support + VWAP + leader status line."""
+    """Plain-language multi-timeframe support + VWAP + leader status."""
     cur = r["currency"]
     bits = []
-    lvl, lab, dist = r.get("support"), r.get("support_label"), r.get("support_dist")
-    if lvl is not None and dist is not None:
-        near = "🟢 right at it" if dist <= 3 else (
-               "🟡 a bit above" if dist <= 6 else "⚪ well above")
-        bits.append(f"🧱 Support {lvl:.2f} {cur} ({dist:.1f}% below) — {near} · {lab}")
+    sl = r.get("support_levels") or {}
+    wk, mo, mj = sl.get("weekly"), sl.get("monthly"), sl.get("major")
+    if wk or mo:
+        # headline: how close to the nearest significant (weekly) floor
+        d = r.get("support_dist")
+        if d is not None:
+            near = "🟢 at support" if d <= 3 else (
+                   "🟡 near-ish" if d <= 7 else "⚪ well above support")
+            bits.append(f"🧱 <b>Support {near}</b>")
+        bits.append(f"   • Weekly:  {_fmt_sup(wk, cur)}")
+        bits.append(f"   • Monthly: {_fmt_sup(mo, cur)}")
+        # show the big long-term floor only if it's a different, well-tested level
+        if mj and mj["touches"] >= 2 and (not mo or abs(mj["level"] - mo["level"]) / mo["level"] > 0.05):
+            bits.append(f"   • Major (most-tested): {_fmt_sup(mj, cur)}")
     av = r.get("above_vwap")
     if av is True:
-        bits.append("💧 Above VWAP — big investors are supporting this price")
+        bits.append("💧 Above VWAP — trading above the ~1-month volume-weighted "
+                    "average price (buyers in profit; common in an uptrend)")
     elif av is False:
-        bits.append("💧 Below VWAP — big investors are averaged in higher (caution)")
+        bits.append("💧 Below VWAP — under the ~1-month average buy price "
+                    "(recent buyers underwater — caution)")
     rsx = r.get("rel_strength")
     if rsx is not None:
         if rsx >= 5:
@@ -251,7 +272,9 @@ def score_one(ticker: str, healthy=None) -> str:
     ctx = None
     if r0 is not None:
         try:
-            dd = yf.download(ticker, period="1y", interval="1d",
+            # 5y = enough monthly pivots to find significant floors, still current
+            # regime (avoids meaningless decades-old split-adjusted lows).
+            dd = yf.download(ticker, period="5y", interval="1d",
                              progress=False, auto_adjust=False)
             ctx = s.daily_context(ticker, dd, r0["price"])
         except Exception:
@@ -309,9 +332,10 @@ def rank(top_n: int = TOP_N, healthy=None):
                            prepost=s.EXTENDED_HOURS, group_by="ticker", threads=True)
     except Exception:
         data = None
-    # …and a daily frame for VWAP / support / relative strength (longer-term).
+    # …and a 2-year daily frame for VWAP + weekly support + rel. strength.
+    # (2y = plenty of weekly pivots, current regime; keeps the 126-name batch light.)
     try:
-        ddata = yf.download(universe, period="1y", interval="1d",
+        ddata = yf.download(universe, period="2y", interval="1d",
                             progress=False, auto_adjust=False,
                             group_by="ticker", threads=True)
     except Exception:
@@ -335,7 +359,16 @@ def rank(top_n: int = TOP_N, healthy=None):
         if r:
             rows.append(r)
     rows.sort(key=lambda x: (x["score"], x["vol_ratio"]), reverse=True)
-    return rows[:top_n]
+    top = rows[:top_n]
+    # News lean only for the handful actually shown (keeps /rank fast). Shown as a
+    # context tag — NOT folded into the score (keyword sentiment is too rough, and
+    # news direction doesn't reliably predict the next move).
+    for r in top:
+        try:
+            r["news_emoji"], r["news_word"] = nw.stock_lean(r["ticker"])
+        except Exception:
+            r["news_emoji"], r["news_word"] = None, None
+    return top
 
 
 def _stamp() -> str:
@@ -411,6 +444,8 @@ def format_ranking(rows, healthy: bool = True) -> str:
             tags.append("💧above VWAP")
         if r.get("rel_strength") is not None and r["rel_strength"] >= 5:
             tags.append("🏆leader")
+        if r.get("news_emoji"):
+            tags.append(f"📰{r['news_emoji']}")
         tag_line = ("  " + " · ".join(tags)) if tags else ""
         # compact size line
         rp = r.get("risk")
@@ -426,7 +461,8 @@ def format_ranking(rows, healthy: bool = True) -> str:
     lines.append(
         "\n<i>0-100 = entry-quality fit to the dip-in-uptrend edge right now (not a "
         "price prediction). 🧱near support · 💧above VWAP (big money supports it) · "
-        "🏆leader (beating the market). ★FIRING = also meets the strict live trigger. "
+        "🏆leader (beating the market) · 📰 news lean (🟢/🔴/⚪, context only). "
+        "★FIRING = also meets the strict live trigger. "
         "💰 sizes so a stop-out risks ~{:.0f}% of your account — set it with /account.</i>"
         .format(s.RISK_PCT)
     )

@@ -1,12 +1,12 @@
-# Stock Alert Bot watchlist — one ticker per line.
-# Lines starting with # are comments. Edit here or use /add and /remove in Telegram.
-# US tickers are plain (NVDA). EU/UK use Yahoo suffixes: .DE .AS .PA .L .F
-# Index ETFs SPY & QQQ are used as market context and always included.
+# StockAlertBot watchlist — one ticker per line, # starts a comment.
+# US tickers are plain; EU/UK use the Yahoo suffix (.DE .AS .PA .L .SW .MI .F).
+# Edit here, or use /add SYM and /remove SYM from Telegram.
 
+# --- Market context (kept on purpose) ---
 SPY
 QQQ
 
-# US mega / large-cap tech
+# --- US mega / large-cap tech ---
 NVDA
 AAPL
 MSFT
@@ -31,8 +31,15 @@ DELL
 ARM
 MRVL
 INTC
+UBER
+ABNB
+PANW
+CRWD
+SNOW
+ANET
+TXN
 
-# US large-cap non-tech
+# --- US large-cap non-tech ---
 LLY
 NVO
 KO
@@ -50,8 +57,17 @@ CVX
 BSX
 JD
 FICO
+AMGN
+GILD
+PFE
+DE
+LMT
+SBUX
+LOW
+PYPL
+COIN
 
-# Europe large-cap (EUR)
+# --- Europe / UK large-cap ---
 SAP.DE
 SIE.DE
 ASML.AS
@@ -63,3 +79,19 @@ SHELL.AS
 MC.PA
 OR.PA
 BY6.F
+RHM.DE
+MBG.DE
+BMW.DE
+VOW3.DE
+ADS.DE
+DBK.DE
+BAS.DE
+BAYN.DE
+ENR.DE
+DHL.DE
+MUV2.DE
+AZN.L
+NESN.SW
+TTE.PA
+SAN.PA
+ADYEN.AS

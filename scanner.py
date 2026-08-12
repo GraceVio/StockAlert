@@ -48,6 +48,14 @@ WATCHLIST = [
     # --- Europe large-cap (EUR) ---
     "SAP.DE", "SIE.DE", "ASML.AS", "AIR.DE", "ALV.DE", "DTE.DE",
     "IFX.DE", "SHELL.AS", "MC.PA", "OR.PA", "BY6.F",
+    # --- Expanded set (2026-08-12) — more liquid, Trade-Republic-buyable names ---
+    # US
+    "UBER", "ABNB", "PANW", "CRWD", "SNOW", "ANET", "TXN", "AMGN", "GILD",
+    "PFE", "DE", "LMT", "SBUX", "LOW", "PYPL", "COIN",
+    # Europe
+    "RHM.DE", "MBG.DE", "BMW.DE", "VOW3.DE", "ADS.DE", "DBK.DE", "BAS.DE",
+    "BAYN.DE", "ENR.DE", "DHL.DE", "MUV2.DE", "AZN.L", "NESN.SW", "TTE.PA",
+    "SAN.PA", "ADYEN.AS",
 ]
 # Trimmed illiquid / hyper-speculative names are listed in TRIMMED_STOCKS.md
 # (kept out on purpose — see that file for the reasons).
@@ -169,6 +177,12 @@ NAMES = {
     "ZS": "Zscaler", "TEAM": "Atlassian", "UPST": "Upstart", "PODD": "Insulet",
     "RDDT": "Reddit", "HOOD": "Robinhood", "SOFI": "SoFi", "TTD": "The Trade Desk",
     "HPE": "HP Enterprise", "DDOG": "Datadog",
+    # expanded watchlist US names
+    "UBER": "Uber", "ABNB": "Airbnb", "PANW": "Palo Alto Networks",
+    "CRWD": "CrowdStrike", "SNOW": "Snowflake", "ANET": "Arista Networks",
+    "TXN": "Texas Instruments", "AMGN": "Amgen", "GILD": "Gilead",
+    "PFE": "Pfizer", "DE": "Deere", "LMT": "Lockheed Martin",
+    "SBUX": "Starbucks", "LOW": "Lowe's", "PYPL": "PayPal", "COIN": "Coinbase",
     # popular German / EU names (for /find — Trade Republic staples)
     "RHM.DE": "Rheinmetall", "MBG.DE": "Mercedes-Benz", "BMW.DE": "BMW",
     "VOW3.DE": "Volkswagen", "P911.DE": "Porsche AG", "PAH3.DE": "Porsche SE",
@@ -365,57 +379,91 @@ def anchored_vwap(df: pd.DataFrame, anchor_date) -> pd.Series:
     return pv.cumsum() / d["Volume"].cumsum()
 
 
-def round_number_below(price: float):
-    """Nearest psychological round number below the price (e.g. 152 -> 150)."""
-    import math
-    if price <= 0:
-        return None
-    if price >= 1000:
-        step = 100
-    elif price >= 100:
-        step = 10
-    elif price >= 20:
-        step = 5
-    else:
-        step = 1
-    lvl = math.floor(price / step) * step
-    return lvl if 0 < lvl < price else None
+# --- Real support lines: tested bounce levels on weekly / monthly timeframes ---
+# A support line is a price FLOOR the stock fell to and bounced from before — and
+# the more times it was tested, and the longer the timeframe, the more it matters.
+# Daily lows are too noisy, so we resample to WEEKLY and MONTHLY, find pivot lows
+# (local bottoms), cluster nearby ones into one level, and count the touches.
+
+def _resample_low_close(daily: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """Down-sample a daily frame to weekly/monthly Low & Close."""
+    return pd.DataFrame({
+        "Low":   daily["Low"].resample(rule).min(),
+        "Close": daily["Close"].resample(rule).last(),
+    }).dropna()
 
 
-def find_support(df: pd.DataFrame, price: float):
-    """Nearest meaningful support BELOW the current price, from a daily frame.
-    Considers: recent swing low, 50- & 200-day averages, the 20-day VWAP, and
-    the nearest round number. Returns (level, label, distance_%%) or (None,...).
-    The closest support below the price is the one that matters for an entry/stop."""
-    close, low = df["Close"], df["Low"]
-    cands = []
-    try:
-        cands.append((float(low.iloc[-20:].min()), "recent low"))
-    except Exception:
-        pass
-    try:
-        cands.append((float(close.rolling(50).mean().iloc[-1]), "50-day avg"))
-    except Exception:
-        pass
-    try:
-        if len(close) >= 200:
-            cands.append((float(close.rolling(200).mean().iloc[-1]), "200-day avg"))
-    except Exception:
-        pass
-    try:
-        cands.append((float(rolling_vwap(df, 20).iloc[-1]), "VWAP (big-investor avg)"))
-    except Exception:
-        pass
-    rn = round_number_below(price)
-    if rn:
-        cands.append((rn, "round number"))
+def _pivot_lows(low: pd.Series, k: int):
+    """Local-bottom prices: a bar whose Low is the lowest in a ±k window."""
+    v = low.values
+    n = len(v)
+    return [float(v[i]) for i in range(k, n - k) if v[i] == v[i - k:i + k + 1].min()]
 
-    below = [(lvl, lab) for lvl, lab in cands
-             if lvl and lvl == lvl and lvl < price]   # lvl==lvl drops NaN
+
+def _nearest_support(levels, price, tol=0.03):
+    """Cluster pivot lows (within tol%) and return the nearest cluster BELOW the
+    price: {level, touches, dist_%}. None if there is no support below."""
+    below = [l for l in levels if l and l == l and l < price * 0.999]
     if not below:
-        return None, None, None
-    lvl, lab = max(below, key=lambda x: x[0])          # closest one under price
-    return lvl, lab, (price - lvl) / price * 100.0
+        return None
+    clusters = []
+    for lvl in sorted(below, reverse=True):
+        for c in clusters:
+            if abs(lvl - c["lvl"]) / c["lvl"] <= tol:
+                c["ls"].append(lvl); c["lvl"] = sum(c["ls"]) / len(c["ls"]); break
+        else:
+            clusters.append({"lvl": lvl, "ls": [lvl]})
+    nr = max(clusters, key=lambda c: c["lvl"])          # highest = closest below
+    return {"level": nr["lvl"], "touches": len(nr["ls"]),
+            "dist": (price - nr["lvl"]) / price * 100.0}
+
+
+def _strongest_support(levels, price, tol=0.04):
+    """The MOST-TESTED cluster below the price (the big long-term floor):
+    {level, touches, dist}. Ties → the closer one. None if nothing below."""
+    below = [l for l in levels if l and l == l and l < price * 0.999]
+    if not below:
+        return None
+    clusters = []
+    for lvl in sorted(below, reverse=True):
+        for c in clusters:
+            if abs(lvl - c["lvl"]) / c["lvl"] <= tol:
+                c["ls"].append(lvl); c["lvl"] = sum(c["ls"]) / len(c["ls"]); break
+        else:
+            clusters.append({"lvl": lvl, "ls": [lvl]})
+    best = max(clusters, key=lambda c: (len(c["ls"]), c["lvl"]))
+    return {"level": best["lvl"], "touches": len(best["ls"]),
+            "dist": (price - best["lvl"]) / price * 100.0}
+
+
+def support_levels(daily: pd.DataFrame, price: float) -> dict:
+    """Support FLOORS below the price on rising timeframes:
+      weekly  — nearest tested level on the weekly chart (most responsive)
+      monthly — nearest tested level on the monthly chart (more significant)
+      major   — the most-tested long-term floor (the big one)
+    Each is {level, touches, dist} or None."""
+    out = {"weekly": None, "monthly": None, "major": None}
+    if daily is None or len(daily) < 40:
+        return out
+    d = daily
+    if isinstance(d.columns, pd.MultiIndex):
+        d = d.copy(); d.columns = d.columns.get_level_values(0)
+    d = d.dropna(subset=["Low", "Close"])
+    if d.empty:
+        return out
+    try:
+        wk = _resample_low_close(d, "W")
+        out["weekly"] = _nearest_support(_pivot_lows(wk["Low"], 3), price)
+    except Exception:
+        pass
+    try:
+        mo = _resample_low_close(d, "ME")
+        piv = _pivot_lows(mo["Low"], 2)
+        out["monthly"] = _nearest_support(piv, price)
+        out["major"] = _strongest_support(piv, price)
+    except Exception:
+        pass
+    return out
 
 
 # SPY daily frame cached once per run (benchmark for relative strength).
@@ -457,8 +505,8 @@ def relative_strength(df: pd.DataFrame, lookback: int = 21):
 
 def daily_context(ticker: str, ddf: pd.DataFrame, price: float) -> dict:
     """Bundle VWAP / support / relative-strength for a ticker from its daily frame."""
-    ctx = {"vwap": None, "above_vwap": None, "support": None,
-           "support_label": None, "support_dist": None, "rel_strength": None,
+    ctx = {"vwap": None, "above_vwap": None, "support_levels": None,
+           "support_dist": None, "support_touches": None, "rel_strength": None,
            "atr_daily": None}
     if ddf is None or len(ddf) < 20:
         return ctx
@@ -482,8 +530,11 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float) -> dict:
     except Exception:
         pass
     try:
-        lvl, lab, dist = find_support(ddf, price)
-        ctx["support"], ctx["support_label"], ctx["support_dist"] = lvl, lab, dist
+        sl = support_levels(ddf, price)
+        ctx["support_levels"] = sl
+        primary = sl.get("weekly") or sl.get("monthly")   # nearest significant
+        ctx["support_dist"] = primary["dist"] if primary else None
+        ctx["support_touches"] = primary["touches"] if primary else None
     except Exception:
         pass
     try:
