@@ -489,7 +489,20 @@ def _freshness_line(rows) -> str:
         tail = f" · ⚠️ candle ~{age_min:.0f} min old (Yahoo feed lagging)"
     else:
         tail = f" · ⚠️ ~{age_min/60:.1f}h old (last available price)"
+    # EU/UK names only trade ~09:00–17:30 CET → outside that they're at last close.
+    non_us = any((r.get("currency") or "USD") != "USD" for r in rows)
+    if non_us and not _eu_market_open():
+        tail += " · 🌍 <b>EU/UK names at last close</b> (not live)"
     return f"📈 Data as of <b>{when}</b> · {label}{tail}"
+
+
+def _eu_market_open() -> bool:
+    """Rough check: are European exchanges open (Mon–Fri ~09:00–17:30 CET)?"""
+    now = dt.datetime.now(ZoneInfo("Europe/Berlin"))
+    if now.weekday() >= 5:
+        return False
+    mins = now.hour * 60 + now.minute
+    return (9 * 60) <= mins <= (17 * 60 + 30)
 
 
 def _volatility_banner() -> str:
@@ -539,48 +552,38 @@ def format_ranking(rows, healthy: bool = True) -> str:
                      "Dip-buys are lower-odds now — these are relative rankings only.")
     lines.append("")
     for i, r in enumerate(rows, 1):
-        star = " ★FIRING" if r["firing"] else ""
+        star = " ★" if r["firing"] else ""
         nm = s.name_for(r["ticker"])
         title = f"{r['ticker']}" + (f" · {nm}" if nm else "")
-        # compact quality tags
+        # Only the tags that carry real signal (backtest): at-support, VWAP
+        # bounce, the two VWAP warnings, and NEGATIVE news. Nothing filler.
         tags = []
         stag = r.get("support_tag") or ""
         if stag and "weak" not in stag and (stag.startswith("at ") or stag.startswith("near")):
-            # e.g. "at medium-term support" -> "🧱 medium-term support"
             tags.append(f"🧱 {r.get('support_tier','')} support")
         st = r.get("vwap_state")
         if st == "bounce":
-            tags.append("🎯VWAP bounce")
+            tags.append("🎯 VWAP bounce")
         elif st == "broke":
-            tags.append("⚠️broke VWAP")
+            tags.append("⚠️ broke VWAP")
         elif st == "chop":
-            tags.append("⚠️VWAP chop")
-        elif st == "above":
-            tags.append("💧above VWAP")
-        if r.get("rel_strength") is not None and r["rel_strength"] >= 5:
-            tags.append("🏆leader")
-        if r.get("news_emoji"):
-            tags.append(f"📰{r['news_emoji']}")
-        tag_line = ("  " + " · ".join(tags)) if tags else ""
-        # compact size line
+            tags.append("⚠️ VWAP chop")
+        if r.get("news_emoji") == "🔴":
+            tags.append("📰 negative news")
+        tag_line = ("\n   " + " · ".join(tags)) if tags else ""
         rp = r.get("risk")
         size_line = ""
         if rp:
             size_line = (f"\n   💰 ≈€{rp['pos_val']:.0f} · risk €{rp['risk_eur']:.0f} "
-                         f"if stop {r['stop_pct']:+.1f}%")
+                         f"(stop {r['stop_pct']:+.1f}%)")
         lines.append(
-            f"{i}. <b>{title}</b> — <b>{r['score']}/100</b> {_band(r['score'])}{star}\n"
-            f"   {r['price']:.2f} {r['currency']} · RSI {r['rsi']:.0f}{tag_line}"
-            f"{size_line}"
+            f"<b>{i}. {title}</b> — <b>{r['score']}/100</b> {_band(r['score'])}{star}\n"
+            f"   {r['price']:.2f} {r['currency']} · RSI {r['rsi']:.0f}"
+            f"{tag_line}{size_line}"
         )
-    lines.append(
-        "\n<i>0-100 = entry-quality fit to the dip-in-uptrend edge right now (not a "
-        "price prediction). 🧱 at support (tested floor) · 🎯 VWAP bounce (prime "
-        "entry) · ⚠️ broke/chop VWAP (avoid) · 🏆 leader · 📰 news lean. "
-        "★FIRING = also meets the strict live trigger. "
-        "💰 sizes so a stop-out risks ~{:.0f}% of your account — set it with /account.</i>"
-        .format(s.RISK_PCT)
-    )
+        lines.append("")   # blank line between setups for readability
+    lines.append("<i>🎯 bounce &amp; 🧱 support = higher quality · ⚠️ = avoid · "
+                 "★ = live trigger. 💰 risks ~1% per trade.</i>")
     return "\n".join(lines)
 
 

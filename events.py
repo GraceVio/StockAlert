@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 import requests
 import pandas as pd
 import scanner as s
+import fmp_data as fmp
 
 MACRO_FILE      = "macro_calendar.json"
 EARN_LOOKAHEAD  = 7    # list earnings within this many days
@@ -69,21 +70,21 @@ DEFAULT_MACRO = [
 # whole market) · 🟠 medium · 🟡 lower. Sector tilt = the usual reaction (not a
 # guarantee — the surprise vs expectations is what actually moves things).
 _MACRO_META = [
-    (("cpi", "inflation"), "High", "🔴",
+    (("cpi", "inflation", "consumer price"), "High", "🔴",
      "Inflation reading. Hotter than expected → fear rates stay high → tech, "
      "growth &amp; real estate usually dip, energy/financials hold better. "
      "Cooler → growth &amp; tech tend to rally."),
-    (("fomc", "rate decision", "fed"), "High", "🔴",
+    (("fomc", "rate decision", "fed", "interest rate"), "High", "🔴",
      "The Fed sets interest rates. Hawkish (higher-for-longer) hurts rate-"
      "sensitive names: tech, real estate, utilities. Dovish (cut/soft tone) lifts them."),
-    (("nfp", "jobs", "payroll"), "Medium", "🟠",
+    (("nfp", "jobs", "payroll", "nonfarm", "non farm"), "Medium", "🟠",
      "Jobs report. Very strong jobs can mean rates stay high (stocks wobble); "
      "weak jobs can spark rate-cut hopes — or growth worries."),
-    (("pce",), "Medium", "🟠",
+    (("pce", "personal consumption"), "Medium", "🟠",
      "The Fed's preferred inflation gauge — same playbook as CPI, usually quieter."),
     (("gdp",), "Medium", "🟡",
      "Growth scorecard. Big surprises move cyclicals — industrials, energy, financials."),
-    (("ppi", "retail"), "Low", "🟡",
+    (("ppi", "producer price", "retail sales"), "Low", "🟡",
      "Secondary inflation/spending data — usually a smaller, shorter market reaction."),
 ]
 
@@ -95,6 +96,15 @@ def macro_meta(name: str):
         if any(k in low for k in keys):
             return impact, emoji, meaning
     return "Medium", "🟠", "Market-moving US release — expect some volatility."
+
+
+def _macro_keys(name: str):
+    """Keyword list for matching this event against FMP's calendar names."""
+    low = (name or "").lower()
+    for keys, _, _, _ in _MACRO_META:
+        if any(k in low for k in keys):
+            return keys
+    return (low,)
 
 
 def _today():
@@ -215,21 +225,42 @@ def macro_text():
                 "<i>Curated list — verify dates against official schedules.</i>")
     lines = ["🏦 <b>Macro events — next 7 days</b>",
              "🔴 high impact · 🟠 medium · 🟡 lower", ""]
+    fmp_used = False
     for e in ev:
         when = "TODAY" if e["days"] == 0 else ("tomorrow" if e["days"] == 1
                                                else f"in {e['days']} days")
         impact, emoji, meaning = macro_meta(e["name"])
         warn = " ⚠️" if e["days"] <= 1 and impact == "High" else ""
+        # consensus forecast / previous / actual (FMP, best-effort)
+        exp = ""
+        try:
+            info = fmp.macro_expected(_macro_keys(e["name"]), e["date"])
+            if info:
+                p = []
+                if info.get("actual") not in (None, ""):
+                    p.append(f"actual <b>{info['actual']}</b>")
+                if info.get("estimate") not in (None, ""):
+                    p.append(f"expected {info['estimate']}")
+                if info.get("previous") not in (None, ""):
+                    p.append(f"prev {info['previous']}")
+                if p:
+                    exp = "   📈 " + " · ".join(p) + "\n"
+                    fmp_used = True
+        except Exception:
+            pass
         lines.append(
             f"{emoji} <b>{e['name']}</b>{warn}\n"
             f"   🗓️ {when} · {e['date']} · {e.get('cet','')} CET\n"
+            f"{exp}"
             f"   💬 {meaning}\n"
         )
     if _SOURCE["kind"] == "live":
-        src = "📡 Dates: live from FRED (official releases) + curated FOMC."
+        src = "📡 Dates: live from FRED (official) + curated FOMC."
     else:
         src = ("📝 Dates: curated best-effort — add a free FRED_API_KEY secret for "
                "live official dates. Verify around 🔴 events.")
+    src += ("  📈 Expected/actual: FMP." if fmp_used
+            else "  📈 Expected values: add a free FMP_API_KEY secret to show them.")
     lines.append(f"<i>{src}\nThe reaction depends on the number vs what was "
                  "expected. Around 🔴 events: avoid brand-new entries, wait until "
                  "it settles.</i>")
@@ -336,11 +367,26 @@ def earnings_warning(ticker: str) -> str:
     line = f"\n{emoji} <b>Earnings {when}</b> — {label} (gap risk)"
     im = implied_move(ticker)
     if im:
-        line += (f"\n   📊 Options expect a <b>±{im['pct']:.0f}%</b> swing on the report "
-                 f"— a tighter stop will likely be gapped through.")
-    est = next_eps_estimate(ticker)
-    if est is not None:
-        line += f"\n   🔢 Consensus EPS estimate: {est:.2f} (beat = often up, miss = down — but the reaction is unpredictable)"
+        line += (f"\n   📊 Options expect a <b>±{im['pct']:.0f}%</b> swing in the SHARE PRICE "
+                 f"on the report — a tighter stop will likely be gapped through.")
+    # consensus estimates — FMP preferred (adds revenue), yfinance EPS fallback
+    eps = rev = None
+    src = None
+    fe = fmp.earnings_estimate(ticker)
+    if fe and (fe.get("eps") is not None or fe.get("revenue")):
+        eps, rev, src = fe.get("eps"), fe.get("revenue"), "FMP"
+    if eps is None:
+        eps = next_eps_estimate(ticker)
+        if eps is not None:
+            src = "Yahoo"
+    bits = []
+    if eps is not None:
+        bits.append(f"EPS {eps:.2f}")
+    if rev:
+        bits.append(f"revenue ${rev/1e9:.1f}B")
+    if bits:
+        line += (f"\n   🔢 Consensus ({src}): " + " · ".join(bits)
+                 + " <i>(what analysts expect; the beat/miss reaction is unpredictable)</i>")
     return line
 
 

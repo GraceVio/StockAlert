@@ -112,7 +112,7 @@ LOG_FILE             = "alerts_log.csv"
 POSITION_MODE     = "smart"
 FIXED_EUR         = 3000.0   # amount per trade (fixed mode)
 PROFIT_TARGET_EUR = 100.0    # euro profit to take (fixed mode)
-ACCOUNT_EUR       = 3000.0   # account size (risk mode + safety cap)
+ACCOUNT_EUR       = 10000.0  # default account size (overridden by ACCOUNT_EUR secret or /account)
 RISK_PCT          = 1.0      # % risked per trade (risk mode)
 ALLOW_LEVERAGE    = False
 
