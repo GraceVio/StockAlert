@@ -29,6 +29,7 @@ import json
 import datetime as dt
 from zoneinfo import ZoneInfo
 import requests
+import pandas as pd
 import scanner as s
 
 MACRO_FILE      = "macro_calendar.json"
@@ -261,14 +262,86 @@ def earnings_impact(dte):
     return "", ""
 
 
+def _current_price(tk):
+    try:
+        p = tk.fast_info.get("lastPrice") or tk.fast_info.get("last_price")
+        if p:
+            return float(p)
+    except Exception:
+        pass
+    try:
+        return float(tk.history(period="1d")["Close"].iloc[-1])
+    except Exception:
+        return None
+
+
+def implied_move(ticker: str):
+    """The swing the OPTIONS market expects around the next earnings, as a %% of
+    price (the at-the-money straddle for the first expiry after earnings). This is
+    a RISK gauge — how big a gap to expect — NOT a direction. None if unavailable."""
+    try:
+        tk = s.yf.Ticker(ticker)
+        exps = list(tk.options or [])
+        if not exps:
+            return None
+        price = _current_price(tk)
+        if not price or price <= 0:
+            return None
+        dte = s.days_to_earnings(ticker)
+        target = ((_today() + dt.timedelta(days=dte)).isoformat()
+                  if dte is not None else _today().isoformat())
+        exp = next((e for e in exps if e >= target), exps[0])
+        ch = tk.option_chain(exp)
+
+        def atm(df):
+            if df is None or df.empty:
+                return None
+            row = df.iloc[(df["strike"] - price).abs().argsort().iloc[:1]].iloc[0]
+            bid, ask = row.get("bid") or 0, row.get("ask") or 0
+            mid = (bid + ask) / 2 if bid and ask else row.get("lastPrice")
+            return float(mid) if mid and mid == mid else None
+
+        c, p = atm(ch.calls), atm(ch.puts)
+        if not c or not p:
+            return None
+        return {"pct": (c + p) / price * 100.0, "exp": exp}
+    except Exception:
+        return None
+
+
+def next_eps_estimate(ticker: str):
+    """Consensus EPS estimate for the next report, or None."""
+    try:
+        cal = s.yf.Ticker(ticker).get_earnings_dates(limit=8)
+        if cal is None or cal.empty:
+            return None
+        now = pd.Timestamp.now(tz=cal.index.tz)
+        fut = cal[cal.index > now]
+        if fut.empty:
+            return None
+        est = fut.iloc[0].get("EPS Estimate")
+        return float(est) if est is not None and est == est else None
+    except Exception:
+        return None
+
+
 def earnings_warning(ticker: str) -> str:
-    """One-line ⚠️ warning for /score & /rank if a stock reports soon, else ''."""
+    """One-line ⚠️ warning for /score if a stock reports soon, with the options'
+    expected swing (implied move) + consensus EPS. Empty if no report within window."""
     dte = s.days_to_earnings(ticker)
     if dte is None or dte > EARN_LOOKAHEAD:
         return ""
     emoji, label = earnings_impact(dte)
     when = "TODAY" if dte == 0 else ("tomorrow" if dte == 1 else f"in {dte} days")
-    return f"\n{emoji} <b>Earnings {when}</b> — {label} (gap risk)"
+    line = f"\n{emoji} <b>Earnings {when}</b> — {label} (gap risk)"
+    im = implied_move(ticker)
+    if im:
+        line += (f"\n   📊 Options expect a <b>±{im['pct']:.0f}%</b> swing on the report "
+                 f"— a tighter stop will likely be gapped through.")
+    est = next_eps_estimate(ticker)
+    if est is not None:
+        line += f"\n   🔢 Consensus EPS estimate: {est:.2f} (beat = often up, miss = down — but the reaction is unpredictable)"
+    return line
 
 
 def earnings_text():
@@ -284,7 +357,11 @@ def earnings_text():
                                                else f"in {e['days']} days")
         emoji, _ = earnings_impact(e["days"])
         nm = f" · {e['name']}" if e["name"] else ""
-        lines.append(f"{emoji} <b>{e['ticker']}</b>{nm} — {when}")
+        im = implied_move(e["ticker"])
+        mv = f" · options expect ±{im['pct']:.0f}%" if im else ""
+        lines.append(f"{emoji} <b>{e['ticker']}</b>{nm} — {when}{mv}")
+    lines.append("\n<i>±% = the swing the options market prices in for the report "
+                 "(a risk gauge, not a direction).</i>")
     return "\n".join(lines)
 
 
