@@ -427,14 +427,12 @@ def _do_diag():
     return (
         "🔧 <b>Config check</b> — can the bot see your secrets?\n\n"
         f"FRED_API_KEY: {yn('FRED_API_KEY')}\n"
-        f"FMP_API_KEY: {yn('FMP_API_KEY')}\n"
         f"ALPACA_KEY_ID: {yn('ALPACA_KEY_ID')}\n"
         f"ALPACA_SECRET_KEY: {yn('ALPACA_SECRET_KEY')}\n"
         f"ACCOUNT_EUR: {yn('ACCOUNT_EUR')}  → using €{s.load_account():.0f}\n"
         f"TRADE_MODE: {yn('TRADE_MODE')}  → {s.load_mode()} mode\n\n"
-        "<i>❌ means either the secret name doesn't match exactly, it isn't mapped "
-        "into the workflow env, or the poller wasn't restarted after you added it. "
-        "Values are never shown here.</i>"
+        "<i>❌ means the secret name doesn't match, isn't mapped into the workflow "
+        "env, or the poller wasn't restarted. Values are never shown here.</i>"
     )
 
 
