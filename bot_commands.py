@@ -32,6 +32,7 @@ import scanner as s
 import rank_today as rk
 import backtest as bt
 import events as ev
+import news as nw
 
 TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 CHAT_ID = str(os.environ.get("TELEGRAM_CHAT_ID", ""))
@@ -40,18 +41,21 @@ API     = f"https://api.telegram.org/bot{TOKEN}"
 HELP = (
     "🤖 <b>Commands</b>\n"
     "/rank — 👑 King Stocks: best-qualified setups right now\n"
-    "/score SYM [SYM …] — 🔎 fit score (0-100), up to 5 stocks\n"
+    "/score SYM [SYM …] — 🔎 fit score (0-100) + support, VWAP &amp; size\n"
+    "/find NAME — 🔍 find a ticker by company name\n"
     "/scan — run the dip-in-uptrend scan now\n"
     "/sector — 📊 sector strength ranking\n"
     "/earnings — 📅 watchlist earnings, next 7 days\n"
-    "/macro — 🏦 CPI/Fed/GDP events, next 7 days\n"
+    "/macro — 🏦 CPI/Fed/GDP events + 🔴🟠🟡 impact\n"
+    "/news — 🌍 market news · /news SYM 📰 for one stock\n"
     "/backtest — 📈 how the strategy performed (~60d)\n"
+    "/account — 💼 show/set account size (for position sizing)\n"
     "/watchlist — 📋 show tracked tickers\n"
     "/add SYM — ➕ add a ticker (e.g. /add NVDA)\n"
     "/remove SYM — ➖ remove a ticker\n"
     "/status — 💚 is the bot alive &amp; market regime\n"
     "/help — this message\n\n"
-    "<i>Nothing here predicts prices. All rules-based. You decide.</i>"
+    "<i>Scores rate entry quality now — not price predictions.</i>"
 )
 
 
@@ -61,11 +65,14 @@ HELP = (
 COMMAND_MENU = [
     ("rank",      "King Stocks — best setups right now"),
     ("score",     "Fit score 0-100 for a stock (e.g. NVDA)"),
+    ("find",      "Find a ticker by company name"),
     ("scan",      "Run the dip-in-uptrend scan now"),
     ("sector",    "Sector strength ranking"),
     ("earnings",  "Watchlist earnings, next 7 days"),
-    ("macro",     "CPI / Fed / GDP events, next 7 days"),
+    ("macro",     "CPI / Fed / GDP events + impact"),
+    ("news",      "Market news, or /news SYM for a stock"),
     ("backtest",  "How the strategy performed (~60d)"),
+    ("account",   "Show/set account size for sizing"),
     ("watchlist", "Show tracked tickers"),
     ("add",       "Add a ticker (e.g. /add NVDA)"),
     ("remove",    "Remove a ticker (e.g. /remove INTC)"),
@@ -344,6 +351,52 @@ def _do_remove(sym: str):
             f"<i>Saved to GitHub — active from the next scan.</i>")
 
 
+def _do_find(query: str):
+    """Look up a Yahoo ticker from a company name (helps with Trade Republic names)."""
+    query = query.strip()
+    if not query:
+        return "Usage: /find &lt;company name&gt;   (e.g. /find Rheinmetall)"
+    q = query.lower()
+    hits = [(tk, nm) for tk, nm in s.NAMES.items()
+            if q in nm.lower() or q in tk.lower()]
+    if not hits:
+        return (f"🔍 No match for “{query}” in my list.\n"
+                f"Yahoo symbols often need a suffix: <b>.DE</b> Xetra · <b>.AS</b> "
+                f"Amsterdam · <b>.PA</b> Paris · <b>.L</b> London · <b>.F</b> Frankfurt.\n"
+                f"If you know the symbol, just try <code>/score SYMBOL</code>.")
+    hits = hits[:12]
+    lines = [f"🔍 <b>Matches for “{query}”</b>", ""]
+    for tk, nm in hits:
+        lines.append(f"• <code>{tk}</code> — {nm}")
+    lines.append(f"\n<i>Score one with e.g. /score {hits[0][0]}</i>")
+    return "\n".join(lines)
+
+
+def _do_account(arg: str):
+    """Show or set the account size used for 1%-rule position sizing."""
+    cur = s.load_account()
+    per = cur * s.RISK_PCT / 100.0
+    if not arg:
+        via_secret = bool(os.environ.get("ACCOUNT_EUR"))
+        src = "ACCOUNT_EUR secret (private)" if via_secret else "this session"
+        return (f"💼 <b>Account size:</b> €{cur:.0f}  <i>(from {src})</i>\n"
+                f"Trades are sized so a stop-out risks ~{s.RISK_PCT:.0f}% = €{per:.0f}.\n\n"
+                f"Change for this session: <code>/account 5000</code>\n"
+                f"<i>To store it permanently &amp; privately (repo is public), set a "
+                f"GitHub secret named ACCOUNT_EUR instead.</i>")
+    val = arg.replace("€", "").replace(",", "").strip()
+    try:
+        v = float(val)
+        if v <= 0:
+            raise ValueError
+    except ValueError:
+        return "Usage: /account 5000   (your total account size in €)"
+    s.save_account(v)   # session file only — NOT committed (public repo, private info)
+    return (f"✅ Account size set to <b>€{v:.0f}</b> for this session.\n"
+            f"Trades now risk ~{s.RISK_PCT:.0f}% = €{v*s.RISK_PCT/100:.0f} per stop-out.\n"
+            f"<i>Resets when the bot restarts — set the ACCOUNT_EUR secret to keep it.</i>")
+
+
 def _do_status():
     now = dt.datetime.now(ZoneInfo("Europe/Berlin")).strftime("%d %b %Y, %H:%M CET")
     wl = s.load_watchlist()
@@ -388,6 +441,10 @@ def handle(text: str):
         return _do_remove(arg)
     if cmd == "/status":
         return _do_status()
+    if cmd == "/find":
+        return _do_find(" ".join(parts[1:]))
+    if cmd == "/account":
+        return _do_account(arg)
     if cmd == "/rank":
         _reply("👑 Analysing the watchlist live… one moment.")
         rk.run(send=True)
@@ -411,6 +468,13 @@ def handle(text: str):
         return ev.earnings_text()
     if cmd == "/macro":
         return ev.macro_text()
+    if cmd == "/news":
+        q = " ".join(parts[1:]).strip()
+        if q:
+            _reply("📰 Reading headlines… one moment.")
+            return nw.stock_news_text(q)
+        _reply("🌍 Reading market news… one moment.")
+        return nw.market_news_text()
     if cmd == "/backtest":
         _reply("📈 Backtesting the whole watchlist… this takes a minute.")
         bt.run(send=True)

@@ -169,6 +169,23 @@ NAMES = {
     "ZS": "Zscaler", "TEAM": "Atlassian", "UPST": "Upstart", "PODD": "Insulet",
     "RDDT": "Reddit", "HOOD": "Robinhood", "SOFI": "SoFi", "TTD": "The Trade Desk",
     "HPE": "HP Enterprise", "DDOG": "Datadog",
+    # popular German / EU names (for /find — Trade Republic staples)
+    "RHM.DE": "Rheinmetall", "MBG.DE": "Mercedes-Benz", "BMW.DE": "BMW",
+    "VOW3.DE": "Volkswagen", "P911.DE": "Porsche AG", "PAH3.DE": "Porsche SE",
+    "DBK.DE": "Deutsche Bank", "CBK.DE": "Commerzbank", "BAS.DE": "BASF",
+    "BAYN.DE": "Bayer", "ADS.DE": "Adidas", "PUM.DE": "Puma", "DHL.DE": "DHL Group",
+    "MRK.DE": "Merck KGaA", "MUV2.DE": "Munich Re", "DB1.DE": "Deutsche Börse",
+    "EOAN.DE": "E.ON", "RWE.DE": "RWE", "VNA.DE": "Vonovia", "HEN3.DE": "Henkel",
+    "CON.DE": "Continental", "ZAL.DE": "Zalando", "HFG.DE": "HelloFresh",
+    "SY1.DE": "Symrise", "FRE.DE": "Fresenius", "QIA.DE": "Qiagen",
+    "NEM.DE": "Nemetschek", "ENR.DE": "Siemens Energy", "HAG.DE": "Hensoldt",
+    "STM.PA": "STMicroelectronics", "TTE.PA": "TotalEnergies", "BNP.PA": "BNP Paribas",
+    "SU.PA": "Schneider Electric", "AI.PA": "Air Liquide", "SAN.PA": "Sanofi",
+    "DG.PA": "Vinci", "RMS.PA": "Hermès", "KER.PA": "Kering", "STLAM.MI": "Stellantis",
+    "ENEL.MI": "Enel", "ISP.MI": "Intesa Sanpaolo", "UCG.MI": "UniCredit",
+    "ADYEN.AS": "Adyen", "PRX.AS": "Prosus", "INGA.AS": "ING Group",
+    "NOVN.SW": "Novartis", "NESN.SW": "Nestlé", "ROG.SW": "Roche",
+    "AZN.L": "AstraZeneca", "HSBA.L": "HSBC", "BP.L": "BP", "ULVR.L": "Unilever",
 }
 
 
@@ -319,6 +336,226 @@ def atr(df: pd.DataFrame, length: int) -> pd.Series:
         (low - prev_close).abs(),
     ], axis=1).max(axis=1)
     return tr.ewm(alpha=1 / length, adjust=False).mean()
+
+
+# ----------------------------------------------------------------------------
+# VWAP + SUPPORT + RELATIVE STRENGTH  (daily-data context for the fit score)
+# ----------------------------------------------------------------------------
+# These read a DAILY frame (not the 15m one) because support levels, the
+# volume-weighted average price big investors watch, and strength-vs-the-market
+# are longer-term context. They answer three plain questions:
+#   VWAP           — are big buyers treating this price as cheap (supporting it)?
+#   support        — is there a floor just below where buyers tend to step in?
+#   rel. strength  — is this stock a leader (beating the market) or a laggard?
+
+def rolling_vwap(df: pd.DataFrame, window: int = 20) -> pd.Series:
+    """Volume-weighted average price over the last `window` days.
+    The price level weighted by where volume actually traded."""
+    tp = (df["High"] + df["Low"] + df["Close"]) / 3.0
+    pv = tp * df["Volume"]
+    return pv.rolling(window).sum() / df["Volume"].rolling(window).sum()
+
+
+def anchored_vwap(df: pd.DataFrame, anchor_date) -> pd.Series:
+    """VWAP measured from a specific date (e.g. last earnings) to now —
+    the average price everyone who bought since that event is sitting at."""
+    d = df.loc[anchor_date:]
+    tp = (d["High"] + d["Low"] + d["Close"]) / 3.0
+    pv = tp * d["Volume"]
+    return pv.cumsum() / d["Volume"].cumsum()
+
+
+def round_number_below(price: float):
+    """Nearest psychological round number below the price (e.g. 152 -> 150)."""
+    import math
+    if price <= 0:
+        return None
+    if price >= 1000:
+        step = 100
+    elif price >= 100:
+        step = 10
+    elif price >= 20:
+        step = 5
+    else:
+        step = 1
+    lvl = math.floor(price / step) * step
+    return lvl if 0 < lvl < price else None
+
+
+def find_support(df: pd.DataFrame, price: float):
+    """Nearest meaningful support BELOW the current price, from a daily frame.
+    Considers: recent swing low, 50- & 200-day averages, the 20-day VWAP, and
+    the nearest round number. Returns (level, label, distance_%%) or (None,...).
+    The closest support below the price is the one that matters for an entry/stop."""
+    close, low = df["Close"], df["Low"]
+    cands = []
+    try:
+        cands.append((float(low.iloc[-20:].min()), "recent low"))
+    except Exception:
+        pass
+    try:
+        cands.append((float(close.rolling(50).mean().iloc[-1]), "50-day avg"))
+    except Exception:
+        pass
+    try:
+        if len(close) >= 200:
+            cands.append((float(close.rolling(200).mean().iloc[-1]), "200-day avg"))
+    except Exception:
+        pass
+    try:
+        cands.append((float(rolling_vwap(df, 20).iloc[-1]), "VWAP (big-investor avg)"))
+    except Exception:
+        pass
+    rn = round_number_below(price)
+    if rn:
+        cands.append((rn, "round number"))
+
+    below = [(lvl, lab) for lvl, lab in cands
+             if lvl and lvl == lvl and lvl < price]   # lvl==lvl drops NaN
+    if not below:
+        return None, None, None
+    lvl, lab = max(below, key=lambda x: x[0])          # closest one under price
+    return lvl, lab, (price - lvl) / price * 100.0
+
+
+# SPY daily frame cached once per run (benchmark for relative strength).
+_spy_daily_cache = {"df": None}
+
+
+def _spy_daily():
+    if _spy_daily_cache["df"] is not None:
+        return _spy_daily_cache["df"]
+    try:
+        m = yf.download(MARKET_INDEX, period="1y", interval="1d",
+                        progress=False, auto_adjust=False)
+        if isinstance(m.columns, pd.MultiIndex):
+            m.columns = m.columns.get_level_values(0)
+        _spy_daily_cache["df"] = m
+    except Exception:
+        _spy_daily_cache["df"] = None
+    return _spy_daily_cache["df"]
+
+
+def _spy_return(lookback: int):
+    m = _spy_daily()
+    try:
+        return (float(m["Close"].iloc[-1]) / float(m["Close"].iloc[-lookback]) - 1) * 100.0
+    except Exception:
+        return None
+
+
+def relative_strength(df: pd.DataFrame, lookback: int = 21):
+    """Stock's %% move minus the market's over `lookback` days (~1 month).
+    > 0 = beating the market (a leader, where money is flowing); < 0 = lagging."""
+    try:
+        sret = (float(df["Close"].iloc[-1]) / float(df["Close"].iloc[-lookback]) - 1) * 100.0
+    except Exception:
+        return None
+    spy = _spy_return(lookback)
+    return None if spy is None else sret - spy
+
+
+def daily_context(ticker: str, ddf: pd.DataFrame, price: float) -> dict:
+    """Bundle VWAP / support / relative-strength for a ticker from its daily frame."""
+    ctx = {"vwap": None, "above_vwap": None, "support": None,
+           "support_label": None, "support_dist": None, "rel_strength": None,
+           "atr_daily": None}
+    if ddf is None or len(ddf) < 20:
+        return ctx
+    if isinstance(ddf.columns, pd.MultiIndex):
+        ddf = ddf.copy()
+        ddf.columns = ddf.columns.get_level_values(0)
+    ddf = ddf.dropna(subset=["Close"])
+    if ddf.empty:
+        return ctx
+    # Daily ATR — a realistic stop distance for a swing trade (the 15m ATR is
+    # distorted tiny during thin pre-/after-market hours).
+    try:
+        ctx["atr_daily"] = float(atr(ddf, ATR_LEN).iloc[-1])
+    except Exception:
+        pass
+    try:
+        vw = float(rolling_vwap(ddf, 20).iloc[-1])
+        if vw == vw:                       # not NaN
+            ctx["vwap"] = vw
+            ctx["above_vwap"] = price >= vw
+    except Exception:
+        pass
+    try:
+        lvl, lab, dist = find_support(ddf, price)
+        ctx["support"], ctx["support_label"], ctx["support_dist"] = lvl, lab, dist
+    except Exception:
+        pass
+    try:
+        ctx["rel_strength"] = relative_strength(ddf, 21)
+    except Exception:
+        pass
+    return ctx
+
+
+# ----------------------------------------------------------------------------
+# ACCOUNT SIZE + 1% RISK CALCULATOR  (the position-sizing safety net)
+# ----------------------------------------------------------------------------
+# The single biggest fix for drawdowns: never risk more than a small, fixed %%
+# of the account on one trade. Given the stop distance, this back-computes how
+# much to actually buy so a stop-out loses only that %%. Trade Republic has no
+# API, so the account size is set by you (via /account) and stored here.
+
+ACCOUNT_FILE = "account.txt"
+
+
+def load_account() -> float:
+    """Account size in EUR. Priority: ACCOUNT_EUR secret (private, permanent) →
+    account.txt (set from chat, lives only in the running session) → default.
+    We deliberately do NOT commit account.txt: the repo is public and your
+    account size is private."""
+    env = os.environ.get("ACCOUNT_EUR")
+    if env:
+        try:
+            v = float(env)
+            if v > 0:
+                return v
+        except Exception:
+            pass
+    try:
+        if os.path.exists(ACCOUNT_FILE):
+            with open(ACCOUNT_FILE, "r", encoding="utf-8") as f:
+                v = float(f.read().strip())
+                if v > 0:
+                    return v
+    except Exception:
+        pass
+    return ACCOUNT_EUR
+
+
+def save_account(value: float):
+    with open(ACCOUNT_FILE, "w", encoding="utf-8") as f:
+        f.write(str(int(round(value))))
+
+
+def risk_position(price: float, currency: str, stop_pct: float,
+                  account_eur: float = None, risk_pct: float = None):
+    """1%-rule sizing: how much to buy so a stop-out loses ~risk_pct of the account.
+    Returns shares, position value, and the € at risk. No leverage (position capped
+    to the account). None if inputs are unusable."""
+    entry_eur = to_eur(price, currency)
+    if not entry_eur or entry_eur <= 0:
+        return None
+    acct = account_eur if account_eur else load_account()
+    rp = risk_pct if risk_pct else RISK_PCT
+    per_share_risk = entry_eur * abs(stop_pct) / 100.0
+    if acct <= 0 or rp <= 0 or per_share_risk <= 0:
+        return None
+    budget = acct * rp / 100.0
+    shares = budget / per_share_risk
+    pos_val = shares * entry_eur
+    capped = False
+    if not ALLOW_LEVERAGE and pos_val > acct:
+        shares = acct / entry_eur
+        pos_val = acct
+        capped = True
+    return {"shares": shares, "pos_val": pos_val, "risk_eur": shares * per_share_risk,
+            "account": acct, "risk_pct": rp, "capped": capped, "entry_eur": entry_eur}
 
 
 # ----------------------------------------------------------------------------
@@ -713,7 +950,7 @@ def format_alert(a: dict) -> str:
             + _eur_line(a)
             + _size_line(a)
             + _earnings_line(a)
-            + "\n\n<i>Size &amp; target scaled to setup quality. You decide. Not financial advice.</i>"
+            + "\n\n<i>Size &amp; target scaled to setup quality.</i>"
         )
 
     if POSITION_MODE == "fixed":
@@ -724,8 +961,7 @@ def format_alert(a: dict) -> str:
             + _size_line(a)
             + _earnings_line(a)
             + f"\n\n<i>Strategy's own target would be {a['target']:.2f} {cur} "
-              f"({a['target_pct']:+.1f}%) — further than +€100. "
-              f"You decide. Not financial advice.</i>"
+              f"({a['target_pct']:+.1f}%) — further than +€100.</i>"
         )
     # risk mode: show full strategy levels
     return (
@@ -736,8 +972,7 @@ def format_alert(a: dict) -> str:
         f"{_size_line(a)}"
         f"{_earnings_line(a)}\n\n"
         f"<b>Apply in Trade Republic using the % levels</b> — "
-        f"stop {a['stop_pct']:+.1f}%, target {a['target_pct']:+.1f}% from your fill.\n"
-        f"<i>You decide and place the trade. Not financial advice.</i>"
+        f"stop {a['stop_pct']:+.1f}%, target {a['target_pct']:+.1f}% from your fill."
     )
 
 
