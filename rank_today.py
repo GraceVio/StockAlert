@@ -27,6 +27,7 @@ import yfinance as yf
 import scanner as s
 import events as ev
 import news as nw
+import alpaca_data as alp
 
 TOP_N = 10
 
@@ -141,9 +142,11 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     return int(round(max(0.0, min(100.0, total)))), reasons, parts
 
 
-def _score_from_df(ticker, df, healthy, ctx=None):
+def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
     """Compute the fit row for one ticker from its already-downloaded frame.
-    `ctx` is the daily VWAP/support/rel-strength bundle (scanner.daily_context)."""
+    `ctx` is the daily VWAP/support/rel-strength bundle (scanner.daily_context).
+    `rt_price` (Alpaca real-time) overrides the latest close so the whole score
+    reflects NOW instead of Yahoo's ~15-min-delayed last candle."""
     if df is None or len(df) < s.EMA_TREND + 5:
         return None
     if isinstance(df.columns, pd.MultiIndex):
@@ -153,6 +156,11 @@ def _score_from_df(ticker, df, healthy, ctx=None):
         return None
 
     df = df.dropna(subset=["Close"])
+    realtime = False
+    if rt_price and rt_price > 0:
+        df = df.copy()
+        df.iloc[-1, df.columns.get_loc("Close")] = float(rt_price)
+        realtime = True
     ema_ser = s.ema(df["Close"], s.EMA_TREND)
     rsi_ser = s.rsi(df["Close"], s.RSI_LEN)
     price    = float(df["Close"].iloc[-1])
@@ -198,7 +206,7 @@ def _score_from_df(ticker, df, healthy, ctx=None):
         "currency": s.ticker_currency(ticker), "rsi": rsi_now,
         "vol_ratio": vol_ratio, "uptrend": price > ema_val,
         "sector_strong": sec_strong, "firing": firing,
-        "as_of": as_of, "reasons": reasons, "parts": parts,
+        "as_of": as_of, "reasons": reasons, "parts": parts, "realtime": realtime,
         "stop": stop, "stop_pct": stop_pct, "risk": risk,
         "vwap": ctx.get("vwap"), "above_vwap": ctx.get("above_vwap"),
         "vwap_state": ctx.get("vwap_state"), "vwap_note": ctx.get("vwap_note"),
@@ -302,7 +310,11 @@ def score_one(ticker: str, healthy=None) -> str:
     except Exception:
         df = None
     # daily frame for VWAP / support / relative strength
-    r0 = _score_from_df(ticker, df, healthy)
+    try:
+        rtp = alp.latest_prices([ticker]).get(ticker)
+    except Exception:
+        rtp = None
+    r0 = _score_from_df(ticker, df, healthy, rt_price=rtp)
     ctx = None; dd = None
     if r0 is not None:
         try:
@@ -313,7 +325,7 @@ def score_one(ticker: str, healthy=None) -> str:
             ctx = s.daily_context(ticker, dd, r0["price"])
         except Exception:
             ctx = None
-    r = _score_from_df(ticker, df, healthy, ctx=ctx) if ctx else r0
+    r = _score_from_df(ticker, df, healthy, ctx=ctx, rt_price=rtp) if ctx else r0
     if not r:
         return (f"❌ No usable data for <b>{ticker}</b>. Check the symbol "
                 f"(EU names need a suffix like .DE .AS .PA .L .F). "
@@ -391,13 +403,21 @@ def rank(top_n: int = TOP_N, healthy=None):
     except Exception:
         ddata = None
 
+    # Real-time US prices (Alpaca IEX) so the score reflects NOW, not the ~15-min
+    # delayed last candle. One batched request; empty dict if no keys → yfinance.
+    try:
+        rt = alp.latest_prices(universe)
+    except Exception:
+        rt = {}
+
     rows = []
     for t in universe:
         try:
             df = data[t] if data is not None else None
         except Exception:
             df = None
-        r0 = _score_from_df(t, df, healthy)  # need price for context; cheap re-first pass
+        rtp = rt.get(t)
+        r0 = _score_from_df(t, df, healthy, rt_price=rtp)  # need price for context
         price = r0["price"] if r0 else None
         ctx = None
         if price is not None and ddata is not None:
@@ -405,7 +425,7 @@ def rank(top_n: int = TOP_N, healthy=None):
                 ctx = s.daily_context(t, ddata[t], price)
             except Exception:
                 ctx = None
-        r = _score_from_df(t, df, healthy, ctx=ctx) if ctx else r0
+        r = _score_from_df(t, df, healthy, ctx=ctx, rt_price=rtp) if ctx else r0
         if r:
             rows.append(r)
     rows.sort(key=lambda x: (x["score"], x["vol_ratio"]), reverse=True)
@@ -450,16 +470,26 @@ def _freshness_line(rows) -> str:
     if not stamps:
         return ""
     newest = max(stamps)
-    age_h = (dt.datetime.now(ZoneInfo("Europe/Berlin")) - newest).total_seconds() / 3600
+    age_min = (dt.datetime.now(ZoneInfo("Europe/Berlin")) - newest).total_seconds() / 60
     when = newest.strftime("%d %b %H:%M CET")
     phase = _us_session()
     label = {
-        "regular": "US market OPEN · live (~15-min delayed)",
-        "pre": "US pre-market · live extended-hours prices (thin volume)",
-        "post": "US after-hours · live extended-hours prices (thin volume)",
-        "closed": f"US market CLOSED — latest available price (~{age_h:.0f}h old)",
+        "regular": "US market OPEN",
+        "pre": "US pre-market (thin volume)",
+        "post": "US after-hours (thin volume)",
+        "closed": "US market CLOSED",
     }[phase]
-    return f"📈 Data as of <b>{when}</b> · {label}"
+    rt_active = any(r.get("realtime") for r in rows)
+    if rt_active:
+        # Alpaca overrides the price → current, even if the yfinance candle is old.
+        tail = " · 🟢 <b>US prices real-time</b> (Alpaca)"
+    elif age_min <= 25:
+        tail = " · live (~15-min delayed)"
+    elif age_min < 120:
+        tail = f" · ⚠️ candle ~{age_min:.0f} min old (Yahoo feed lagging)"
+    else:
+        tail = f" · ⚠️ ~{age_min/60:.1f}h old (last available price)"
+    return f"📈 Data as of <b>{when}</b> · {label}{tail}"
 
 
 def _volatility_banner() -> str:
