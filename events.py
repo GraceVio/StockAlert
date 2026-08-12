@@ -259,8 +259,14 @@ def macro_text():
     else:
         src = ("📝 Dates: curated best-effort — add a free FRED_API_KEY secret for "
                "live official dates. Verify around 🔴 events.")
-    src += ("  📈 Expected/actual: FMP." if fmp_used
-            else "  📈 Expected values: add a free FMP_API_KEY secret to show them.")
+    if fmp_used:
+        src += "  📈 Expected/actual: FMP."
+    elif fmp.available():
+        src += ("  📈 FMP key detected, but no matching calendar data returned "
+                "(your free tier may not include the economic calendar).")
+    else:
+        src += "  📈 Expected values: FMP key NOT detected — check the secret name is "
+        src += "FMP_API_KEY and restart the poller."
     lines.append(f"<i>{src}\nThe reaction depends on the number vs what was "
                  "expected. Around 🔴 events: avoid brand-new entries, wait until "
                  "it settles.</i>")

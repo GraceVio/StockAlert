@@ -79,6 +79,7 @@ COMMAND_MENU = [
     ("add",       "Add a ticker (e.g. /add NVDA)"),
     ("remove",    "Remove a ticker (e.g. /remove INTC)"),
     ("status",    "Is the bot alive & market regime"),
+    ("diag",      "Check which API keys/secrets are seen"),
     ("help",      "Show all commands"),
 ]
 
@@ -419,6 +420,24 @@ def _do_mode(arg: str):
             f"{s.mode_horizon()}.\n<i>Resets on restart unless you set a TRADE_MODE secret.</i>")
 
 
+def _do_diag():
+    """Show which secrets/keys the running bot can actually see (values hidden)."""
+    def yn(k):
+        return "✅ detected" if os.environ.get(k) else "❌ NOT detected"
+    return (
+        "🔧 <b>Config check</b> — can the bot see your secrets?\n\n"
+        f"FRED_API_KEY: {yn('FRED_API_KEY')}\n"
+        f"FMP_API_KEY: {yn('FMP_API_KEY')}\n"
+        f"ALPACA_KEY_ID: {yn('ALPACA_KEY_ID')}\n"
+        f"ALPACA_SECRET_KEY: {yn('ALPACA_SECRET_KEY')}\n"
+        f"ACCOUNT_EUR: {yn('ACCOUNT_EUR')}  → using €{s.load_account():.0f}\n"
+        f"TRADE_MODE: {yn('TRADE_MODE')}  → {s.load_mode()} mode\n\n"
+        "<i>❌ means either the secret name doesn't match exactly, it isn't mapped "
+        "into the workflow env, or the poller wasn't restarted after you added it. "
+        "Values are never shown here.</i>"
+    )
+
+
 def _do_status():
     now = dt.datetime.now(ZoneInfo("Europe/Berlin")).strftime("%d %b %Y, %H:%M CET")
     wl = s.load_watchlist()
@@ -463,6 +482,8 @@ def handle(text: str):
         return _do_remove(arg)
     if cmd == "/status":
         return _do_status()
+    if cmd == "/diag":
+        return _do_diag()
     if cmd == "/find":
         return _do_find(" ".join(parts[1:]))
     if cmd == "/account":
