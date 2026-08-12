@@ -58,6 +58,8 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           POLL_SECONDS: "20400"   # ~5h40m, then exits before the 350-min cap
         run: python bot_commands.py
 
