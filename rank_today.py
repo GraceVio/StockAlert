@@ -293,6 +293,7 @@ def score_one(ticker: str, healthy=None) -> str:
     ticker = ticker.strip().upper()
     if not ticker:
         return "Usage: /score SYM   (e.g. /score NVDA or /score SAP.DE)"
+    s.refresh_caches()   # manual command → refetch market/sector/FX (not session-cached)
     if healthy is None:
         healthy = s.market_is_healthy()
     try:
@@ -370,6 +371,7 @@ def score_one(ticker: str, healthy=None) -> str:
 
 def rank(top_n: int = TOP_N, healthy=None):
     """Batch-scan the wide universe and return the top_n by 0-100 fit score."""
+    s.refresh_caches()   # manual command → refetch market/sector/FX (not session-cached)
     if healthy is None:
         healthy = s.market_is_healthy()
     universe = s.rank_universe()

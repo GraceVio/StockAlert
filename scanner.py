@@ -909,6 +909,17 @@ def rank_universe():
 _sector_cache = {"data": None}
 
 
+def refresh_caches():
+    """Clear the per-session caches (market/SPY, sector strength, FX) so the next
+    call re-downloads them. The long-poll bot stays alive ~5.7h and would
+    otherwise reuse these — call this on each manual /rank and /score so results
+    are as fresh as Yahoo allows (~15-min delayed feed)."""
+    _fx_cache["EURUSD=X"] = None
+    _fx_cache["EURGBP=X"] = None
+    _spy_daily_cache["df"] = None
+    _sector_cache["data"] = None
+
+
 def get_sector_strength():
     """Return {sector: {'month': %, 'strong': bool}} once per run."""
     if _sector_cache["data"] is not None:
