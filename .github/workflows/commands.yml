@@ -60,6 +60,7 @@ jobs:
           FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
           ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
           ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           ACCOUNT_EUR: ${{ secrets.ACCOUNT_EUR }}
           TRADE_MODE: ${{ secrets.TRADE_MODE }}
           POLL_SECONDS: "20400"   # ~5h40m, then exits before the 350-min cap
