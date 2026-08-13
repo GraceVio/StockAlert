@@ -35,45 +35,51 @@ TOP_N = 10
 def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy,
                vwap_state=None, rel_strength=None, support_bonus=0.0,
                support_tag=None):
-    """Score = validated dip-in-uptrend CORE (0-80) + quality ENHANCERS (0-20).
+    """Score = dip-in-uptrend CORE (0-72) + quality ENHANCERS (0-28).
 
-    CORE (the edge that worked): Trend 22 · Dip/RSI 30 · Turning-up 14 · Volume 8
-    · Sector 3 · Regime 3.
-    ENHANCERS (add-only — never knock a good dip out, just lift the excellent
-    ones): At-tested-support +9 · Above-VWAP +6 · Rel.strength +5.  Weights set
-    from the backtest: support was the strongest factor, VWAP helped, relative
-    strength barely moved outcomes.
+    WEIGHTS RE-SET 2026-08-13 from a 6217-setup / 5-year factor test. What that
+    test actually found, per factor (avg R vs a +0.056 baseline):
+      AT TESTED SUPPORT  +0.102 R (53% win)  vs NOT at support -0.003 R (48%)
+          → the ONLY factor with a real, large edge → biggest enhancer (22).
+      VWAP (near / touched / slope-up / volume-confirmed)  all ≈ 0 or NEGATIVE
+          → weight cut to 4, kept mainly for its AVOID warnings (broke / chop).
+      Relative strength  ≈ 0  → cut to 2.
+    CORE (Trend 20 · Dip/RSI 27 · Turning-up 12 · Volume 7 · Sector 3 · Regime 3)
+    describes the setup shape; the honest caveat is that the core itself ranked
+    outcomes barely better than chance in the earlier 1240-setup test — so treat
+    the number as ENTRY QUALITY, not a profit forecast.
+    ENHANCERS are add-only — they lift excellent setups, never knock a good dip out.
     Adjustments are smooth (no cliffs): an over-extended RSI is trimmed, and a
     below-trend price gets a GRADUAL counter-trend haircut (bigger the further
     below), so scores don't jump when price grazes the trend line."""
     dist = (price / ema_val - 1) * 100 if ema_val else 0.0
     reasons = []
 
-    # ---------------- CORE edge (0-80) ----------------
-    # Trend (0-22): reward uptrend, fade as it gets over-extended above the EMA.
+    # ---------------- CORE edge (0-72) ----------------
+    # Trend (0-20): reward uptrend, fade as it gets over-extended above the EMA.
     if price > ema_val:
-        trend = max(9.0, min(22.0, 22.0 - max(0.0, dist - 6.0) * 1.4))
+        trend = max(8.0, min(20.0, 20.0 - max(0.0, dist - 6.0) * 1.3))
         reasons.append("uptrend")
     else:
-        trend = max(0.0, min(9.0, 9.0 + dist))     # dist is negative here
+        trend = max(0.0, min(8.0, 8.0 + dist))     # dist is negative here
         reasons.append("below trend")
 
-    # Dip / RSI zone (0-30): peaks at RSI ~35, fades for extended/falling-knife.
-    rsi_s = max(0.0, 30.0 - abs(rsi_now - 35.0) * 1.2)
+    # Dip / RSI zone (0-27): peaks at RSI ~35, fades for extended/falling-knife.
+    rsi_s = max(0.0, 27.0 - abs(rsi_now - 35.0) * 1.1)
     if 30 <= rsi_now <= 45:
         reasons.append("dip zone")
     elif rsi_now > 60:
         reasons.append("extended")
 
-    # RSI turning back up (0-14).
+    # RSI turning back up (0-12).
     if rsi_now > rsi_prev:
-        turn = min(14.0, (rsi_now - rsi_prev) * 3.0)
+        turn = min(12.0, (rsi_now - rsi_prev) * 2.6)
         reasons.append("turning up")
     else:
         turn = 0.0
 
-    # Volume (0-8): above-average buying interest confirms the bounce.
-    vol = min(8.0, max(0.0, (vol_ratio - 0.8) * 8.0))
+    # Volume (0-7): above-average buying interest confirms the bounce.
+    vol = min(7.0, max(0.0, (vol_ratio - 0.8) * 7.0))
     if vol_ratio >= 1.3:
         reasons.append(f"vol {vol_ratio:.1f}x")
 
@@ -86,12 +92,13 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
         sec = 1.5
     reg = 3.0 if healthy else 0.0
 
-    core = trend + rsi_s + turn + vol + sec + reg          # up to 80
+    core = trend + rsi_s + turn + vol + sec + reg          # up to 72
 
-    # -------------- ENHANCERS (0-20, add-only) --------------
-    # At a TESTED support floor (0-9): STRONGEST factor in the backtest. Bonus +
-    # timeframe tag precomputed by scanner.support_summary. Away = 0 (no penalty).
-    supp = min(9.0, support_bonus or 0.0)
+    # -------------- ENHANCERS (0-28, add-only) --------------
+    # At a TESTED support floor (0-22): by far the STRONGEST factor measured
+    # (+0.102 R at support vs -0.003 R away from it). Bonus + timeframe tag are
+    # precomputed by scanner.support_summary. Away = 0 (no penalty).
+    supp = min(22.0, support_bonus or 0.0)
     if support_tag:
         reasons.append(support_tag)
 
@@ -99,9 +106,9 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     # from above (a "bounce", +0.16R / 57% win), NOT merely above it. Stretched,
     # broken-below and chop were all losers → 0 bonus + a warning tag.
     if vwap_state == "bounce":
-        vwap_s = 6.0; reasons.append("🎯 bounce at VWAP")
+        vwap_s = 4.0; reasons.append("🎯 bounce at VWAP")
     elif vwap_state == "above":
-        vwap_s = 2.0; reasons.append("above VWAP")
+        vwap_s = 1.5; reasons.append("above VWAP")
     elif vwap_state == "far_above":
         vwap_s = 0.5; reasons.append("stretched above VWAP")
     elif vwap_state == "broke":
@@ -111,17 +118,17 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     elif vwap_state == "below":
         vwap_s = 0.0; reasons.append("below VWAP")
     else:
-        vwap_s = 2.0
+        vwap_s = 1.5
 
-    # Relative strength (0-5): small weight — it barely moved outcomes in the test.
+    # Relative strength (0-2): tiny weight — measured ≈ zero effect on outcomes.
     if rel_strength is None:
-        rs = 2.0
-    elif rel_strength >= 5:
-        rs = 5.0; reasons.append("market leader")
-    elif rel_strength >= 0:
-        rs = 3.0
-    elif rel_strength >= -5:
         rs = 1.0
+    elif rel_strength >= 5:
+        rs = 2.0; reasons.append("market leader")
+    elif rel_strength >= 0:
+        rs = 1.5
+    elif rel_strength >= -5:
+        rs = 0.5
     else:
         rs = 0.0; reasons.append("lagging market")
 
@@ -135,9 +142,9 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
         total *= (1.0 - min(0.15, below * 0.03))   # gradual counter-trend haircut
         reasons.append("counter-trend risk")
 
-    parts = {"Trend": (trend, 22), "Dip/RSI": (rsi_s, 30), "Turning up": (turn, 14),
-             "Volume": (vol, 8), "Sector": (sec, 3), "Regime": (reg, 3),
-             "Support +": (supp, 9), "VWAP +": (vwap_s, 6), "Rel.str +": (rs, 5)}
+    parts = {"Trend": (trend, 20), "Dip/RSI": (rsi_s, 27), "Turning up": (turn, 12),
+             "Volume": (vol, 7), "Sector": (sec, 3), "Regime": (reg, 3),
+             "Support +": (supp, 22), "VWAP +": (vwap_s, 4), "Rel.str +": (rs, 2)}
 
     return int(round(max(0.0, min(100.0, total)))), reasons, parts
 
@@ -214,6 +221,8 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
         "support_tier": ctx.get("support_tier"), "support_tag": ctx.get("support_tag"),
         "support_dist": ctx.get("support_dist"), "support_touches": ctx.get("support_touches"),
         "rel_strength": ctx.get("rel_strength"),
+        "range_pos": ctx.get("range_pos"), "range_pct": ctx.get("range_pct"),
+        "support_blocked": ctx.get("support_blocked"),
     }
 
 
@@ -231,7 +240,12 @@ def _support_line(r) -> str:
     cur = r["currency"]
     bits = []
     sl = r.get("support_levels") or {}
-    sh, md, lg = sl.get("short"), sl.get("medium"), sl.get("long")
+    # Only show levels that are actually RELEVANT to the price now. Beyond ~5%
+    # the backtest edge fades (within 3%: +0.102 R · within 8%: +0.066), and a
+    # floor 10% away tells you nothing about today — so it's hidden entirely.
+    def _near(lv):
+        return lv if (lv and lv.get("dist") is not None and lv["dist"] <= 5.0) else None
+    sh, md, lg = _near(sl.get("short")), _near(sl.get("medium")), _near(sl.get("long"))
     if sh or md or lg:
         # headline: which timeframe's tested floor the price is AT (if any)
         tag = r.get("support_tag")
@@ -243,9 +257,21 @@ def _support_line(r) -> str:
             bits.append(f"🧱 <b>Support: {tag}</b>")
         else:
             bits.append("🧱 <b>Support:</b> not at a tested floor right now")
-        bits.append(f"   • Short-term (live, intraday): {_fmt_sup(sh, cur)}")
-        bits.append(f"   • Medium-term (≈6mo, daily):  {_fmt_sup(md, cur)}")
-        bits.append(f"   • Long-term (≈1yr, weekly):   {_fmt_sup(lg, cur)}")
+        rp = r.get("range_pos")
+        if rp is not None:
+            if rp <= 40:
+                icon, mean = "🟢", "in the lower part — a real pullback"
+            elif rp <= 55:
+                icon, mean = "🟡", "middle of the range"
+            else:
+                icon, mean = "🔴", "near the highs — buying here is chasing"
+            bits.append(f"📍 {icon} Price at <b>{rp:.0f}%</b> of its recent range — {mean}")
+        if sh:
+            bits.append(f"   • Short-term (live, intraday): {_fmt_sup(sh, cur)}")
+        if md:
+            bits.append(f"   • Medium-term (≈6mo, daily):  {_fmt_sup(md, cur)}")
+        if lg:
+            bits.append(f"   • Long-term (≈1yr, weekly):   {_fmt_sup(lg, cur)}")
     st = r.get("vwap_state")
     vd = r.get("vwap_dist")
     dtxt = f" ({vd:+.1f}%)" if vd is not None else ""
@@ -325,9 +351,7 @@ def _analyst_line(ticker: str, price: float, cur: str) -> str:
         pass
     if not bits:
         return ""
-    return ("\n🎯 <b>Analysts:</b> " + " · ".join(bits) +
-            "\n   <i>Wall-St. consensus — a longer-horizon sanity check, not a "
-            "day-trade trigger; the beat/miss reaction is unpredictable.</i>")
+    return "\n🎯 <b>Analysts</b> <i>(Wall Street)</i>: " + " · ".join(bits)
 
 
 def score_one(ticker: str, healthy=None) -> str:

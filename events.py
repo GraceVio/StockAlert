@@ -223,8 +223,7 @@ def macro_text():
     if not ev:
         return ("🏦 <b>Macro — next 7 days</b>\n\nNothing major scheduled.\n\n"
                 "<i>Curated list — verify dates against official schedules.</i>")
-    lines = ["🏦 <b>Macro events — next 7 days</b>",
-             "🔴 high impact · 🟠 medium · 🟡 lower", ""]
+    lines = ["🏦 <b>Macro events — next 7 days</b>", ""]
     ff_used = False
     for e in ev:
         when = "TODAY" if e["days"] == 0 else ("tomorrow" if e["days"] == 1
@@ -255,9 +254,8 @@ def macro_text():
                "live official dates. Verify around 🔴 events.")
     if ff_used:
         src += "  📈 Expected/previous: Forex Factory (free)."
-    lines.append(f"<i>{src}\nThe reaction depends on the number vs what was "
-                 "expected. Around 🔴 events: avoid brand-new entries, wait until "
-                 "it settles.</i>")
+    lines.append("🔴 high impact · 🟠 medium · 🟡 lower")
+    lines.append(f"<i>{src}</i>")
     return "\n".join(lines)
 
 

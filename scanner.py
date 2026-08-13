@@ -383,8 +383,9 @@ def anchored_vwap(df: pd.DataFrame, anchor_date) -> pd.Series:
 def vwap_signal(daily: pd.DataFrame, price: float, window: int = 20) -> dict:
     """Classify price vs the ~1-month VWAP into one of the 'rubber band' states.
     Returns {dist (%), above, state, note}. States:
-      bounce    — near VWAP from above → prime dip-buy zone (the good one)
-      above     — comfortably above VWAP (buyers in control)
+      bounce    — a GENUINE pullback: price was clearly above VWAP, has come back
+                  DOWN to the line, and is TURNING UP again → high-odds re-entry
+      above     — comfortably above VWAP (buyers in control, but no fresh pullback)
       far_above — stretched well above VWAP (rubber band; snap-back risk)
       broke     — fresh drop BELOW VWAP (trend may have broken → AVOID)
       below     — under VWAP (recent buyers underwater)
@@ -413,14 +414,33 @@ def vwap_signal(daily: pd.DataFrame, price: float, window: int = 20) -> dict:
     flips = sum(1 for a, b in zip(signs, signs[1:]) if a != b)
     was_above = any(x > 0 for x in signs[-6:])
 
+    # A real BOUNCE is a sequence, not a position: price must have actually come
+    # DOWN and touched the VWAP line in the last few bars, and now be turning
+    # back UP. Without this, a stock drifting near its highs a hair above VWAP
+    # was mislabelled a "bounce" (the JNJ case).
+    touched = False
+    turning = False
+    try:
+        lows = d["Low"].iloc[-4:-1]
+        vws = vw.iloc[-4:-1]
+        touched = bool((lows <= vws * 1.005).any())      # reached/pierced the line
+        c_now = float(d["Close"].iloc[-1]); c_prev = float(d["Close"].iloc[-2])
+        turning = c_now > c_prev and price >= vwn        # turned back up, holding VWAP
+    except Exception:
+        pass
+
     if flips >= 4:
         res["state"] = "chop"; res["note"] = "chopping across VWAP — directionless, avoid"
     elif dist < -2 and was_above:
         res["state"] = "broke"; res["note"] = "broke below VWAP — trend may have broken, avoid"
     elif dist < -1:
         res["state"] = "below"; res["note"] = "under VWAP — recent buyers underwater"
+    elif -1 <= dist <= 3 and touched and turning:
+        res["state"] = "bounce"
+        res["note"] = "pulled back TO VWAP and turned up — genuine dip-buy zone"
     elif -1 <= dist <= 3:
-        res["state"] = "bounce"; res["note"] = "at VWAP from above — prime dip-buy zone"
+        res["state"] = "above"
+        res["note"] = "near VWAP but no pullback-and-turn yet — wait for the bounce"
     elif dist > 8:
         res["state"] = "far_above"; res["note"] = "stretched above VWAP — snap-back risk"
     else:
@@ -504,6 +524,74 @@ def _pivot_lows(low: pd.Series, k: int):
     return [float(v[i]) for i in range(k, n - k) if v[i] == v[i - k:i + k + 1].min()]
 
 
+def _pivot_lows_ts(low: pd.Series, k: int):
+    """Local bottoms as (position, price) — keeps the bar position so touches can
+    be DEBOUNCED in time (the plain _pivot_lows throws the timestamps away)."""
+    v = low.values
+    n = len(v)
+    return [(i, float(v[i])) for i in range(k, n - k)
+            if v[i] == v[i - k:i + k + 1].min()]
+
+
+def _count_tests(low: pd.Series, level: float, tol: float, exit_mult: float = 1.5):
+    """How many DISTINCT times price came down and tested `level`.
+
+    This is the fix for the "tested 34×" illusion: two hours of sideways drift
+    inside the zone is ONE test, not 34. Price must LEAVE the zone (rise above
+    it by exit_mult × the band) before a new visit is counted."""
+    if not level or level <= 0:
+        return 0
+    band = level * tol
+    top = level + band
+    exit_at = level + band * exit_mult
+    tests, inside = 0, False
+    for x in low.values:
+        if x != x:                       # NaN
+            continue
+        if not inside and x <= top:      # came down into the zone → one test
+            tests += 1
+            inside = True
+        elif inside and x > exit_at:     # left the zone → ready for a new test
+            inside = False
+    return tests
+
+
+def _support_zone(low: pd.Series, pivots, price: float, tol: float):
+    """Nearest tested support zone BELOW the price, built from swing-low pivots
+    and counted with DEBOUNCED tests. {level, touches, dist, pivots} or None."""
+    below = [(i, l) for i, l in pivots if l and l == l and l < price * 0.999]
+    if not below:
+        return None
+    clusters = []
+    for _, lvl in sorted(below, key=lambda x: -x[1]):
+        for c in clusters:
+            if abs(lvl - c["lvl"]) / c["lvl"] <= tol:
+                c["ls"].append(lvl); c["lvl"] = sum(c["ls"]) / len(c["ls"]); break
+        else:
+            clusters.append({"lvl": lvl, "ls": [lvl]})
+    nr = max(clusters, key=lambda c: c["lvl"])      # highest = closest below
+    lvl = nr["lvl"]
+    return {"level": lvl, "touches": _count_tests(low, lvl, tol),
+            "dist": (price - lvl) / price * 100.0, "pivots": len(nr["ls"])}
+
+
+def range_position(df: pd.DataFrame):
+    """Where the current price sits inside its recent high-low range, 0-100.
+    0 = at the lows (a real pullback), 100 = at the highs (chasing).
+    Returns (position_%, range_width_%) or (None, None)."""
+    try:
+        d = df
+        if isinstance(d.columns, pd.MultiIndex):
+            d = d.copy(); d.columns = d.columns.get_level_values(0)
+        lo = float(d["Low"].min()); hi = float(d["High"].max())
+        px = float(d["Close"].dropna().iloc[-1])
+        if not (hi > lo > 0):
+            return None, None
+        return (px - lo) / (hi - lo) * 100.0, (hi / lo - 1) * 100.0
+    except Exception:
+        return None, None
+
+
 def _nearest_support(levels, price, tol=0.03):
     """Cluster pivot lows (within tol%) and return the nearest cluster BELOW the
     price: {level, touches, dist_%}. None if there is no support below."""
@@ -559,30 +647,46 @@ def support_levels(daily: pd.DataFrame, price: float, intraday=None) -> dict:
     if d.empty:
         return out
     try:
-        # SHORT-TERM = live intraday: is the CURRENT price sitting on a recent
-        # intraday support (per Grace 2026-08-13). Uses the 15m frame; a ±4-bar
-        # (~1h) pivot finds intraday swing lows. Tighter tol (2%) — intraday
-        # floors sit close to price. Falls back to recent daily lows if no
-        # intraday frame is available.
+        # SHORT-TERM = live intraday, last ~3 SESSIONS only (a support line drawn
+        # across a whole week of 15m bars is meaningless). Tight 0.6% clustering
+        # so a single consolidation isn't smeared into one giant "zone", and the
+        # PREVIOUS DAY LOW is added as a candidate — it's a level traders watch.
         if intraday is not None and len(intraday) > 12:
             idf = intraday
             if isinstance(idf.columns, pd.MultiIndex):
                 idf = idf.copy(); idf.columns = idf.columns.get_level_values(0)
             idf = idf.dropna(subset=["Low"])
-            out["short"] = _nearest_support(_pivot_lows(idf["Low"], 4), price, tol=0.02)
+            if isinstance(idf.index, pd.DatetimeIndex):
+                sessions = sorted(set(idf.index.date))
+                if len(sessions) > 3:
+                    keep = set(sessions[-3:])
+                    idf = idf[[dd in keep for dd in idf.index.date]]
+                    prev = idf[[dd == sessions[-2] for dd in idf.index.date]] \
+                        if len(sessions) >= 2 else None
+                else:
+                    prev = None
+            else:
+                prev = None
+            piv = _pivot_lows_ts(idf["Low"], 4)
+            if prev is not None and len(prev):
+                piv.append((0, float(prev["Low"].min())))     # previous-day low
+            out["short"] = _support_zone(idf["Low"], piv, price, tol=0.006)
         else:
-            out["short"] = _nearest_support(_pivot_lows(d["Low"].tail(22), 2), price)
+            piv = _pivot_lows_ts(d["Low"].tail(22), 2)
+            out["short"] = _support_zone(d["Low"].tail(22), piv, price, tol=0.01)
     except Exception:
         pass
     try:
-        # ~6 months of daily bars.
-        out["medium"] = _nearest_support(_pivot_lows(d["Low"].tail(126), 4), price)
+        # ~6 months of daily bars (swing structure — the main one).
+        sl = d["Low"].tail(126)
+        out["medium"] = _support_zone(sl, _pivot_lows_ts(sl, 4), price, tol=0.015)
     except Exception:
         pass
     try:
         # ~1 year, resampled to weekly (smooths noise for the major floor).
         wk = _resample_low_close(d.tail(252), "W")
-        out["long"] = _nearest_support(_pivot_lows(wk["Low"], 3), price)
+        out["long"] = _support_zone(wk["Low"], _pivot_lows_ts(wk["Low"], 3),
+                                    price, tol=0.025)
     except Exception:
         pass
     return out
@@ -591,18 +695,49 @@ def support_levels(daily: pd.DataFrame, price: float, intraday=None) -> dict:
 # How strongly to reward being AT each horizon's tested floor (higher TF = more).
 # Weights bumped 2026-08-12 after the backtest showed at-support was the single
 # strongest factor (+0.08R vs -0.18R when not at support). (bonus_at, bonus_near)
+# Scaled up 2026-08-13: at-tested-support was the ONLY factor with a real edge in
+# the 6217-setup test (+0.102 R vs -0.003 R away), so it now carries the largest
+# share of the score. (bonus_at, bonus_near) per horizon; higher TF = stronger.
 _SUPPORT_TIERS = [
-    ("long",   "long-term",   9.0, 4.5),
-    ("medium", "medium-term", 7.0, 3.5),
-    ("short",  "short-term",  5.0, 2.5),
+    ("long",   "long-term",   22.0, 11.0),
+    ("medium", "medium-term", 17.0,  8.5),
+    ("short",  "short-term",  12.0,  6.0),
 ]
 
 
-def support_summary(levels: dict) -> dict:
+# Range-position credit, CALIBRATED FROM THE BACKTEST (6217 setups, 5y):
+# at tested support & low in range  → +0.121 R
+# at tested support & high in range → +0.091 R
+# Both are strongly positive, so being high in the range is a MILD demerit, not a
+# disqualifier — an earlier hard block would have thrown away 1625 profitable
+# setups. Ratio 0.091/0.121 ≈ 0.75 sets RANGE_POS_HIGH_FACTOR.
+RANGE_POS_GOOD = 40.0          # full credit at/below this % of the recent range
+RANGE_POS_MAX  = 55.0          # above this: reduced credit (NOT blocked)
+RANGE_POS_HIGH_FACTOR = 0.75   # evidence-calibrated, not a guess
+MIN_RANGE_PCT  = 2.0           # below this the range is too tight to read (noted only)
+
+
+def support_summary(levels: dict, range_pos=None, range_pct=None) -> dict:
     """Which tested support the price is currently AT/near, across horizons.
-    Returns {bonus (0-7 for the score), tag (names the timeframe), tier, dist,
-    touches}. Prefers the strongest (higher-TF, tested) floor it qualifies for."""
-    best = {"bonus": 0.0, "tag": None, "tier": None, "dist": None, "touches": None}
+    Returns {bonus, tag, tier, dist, touches, note}.
+
+    A level needs 2+ DEBOUNCED tests to count as real support — the backtest
+    showed 2+ is the sweet spot (more touches did NOT improve results).
+    Range position scales the credit (see constants above) but never blocks:
+    at-support setups pay off even when price is high in its range."""
+    best = {"bonus": 0.0, "tag": None, "tier": None, "dist": None,
+            "touches": None, "note": None}
+
+    factor = 1.0
+    if range_pos is not None:
+        if range_pos >= RANGE_POS_MAX:
+            factor = RANGE_POS_HIGH_FACTOR
+        elif range_pos > RANGE_POS_GOOD:
+            span = (range_pos - RANGE_POS_GOOD) / (RANGE_POS_MAX - RANGE_POS_GOOD)
+            factor = 1.0 - span * (1.0 - RANGE_POS_HIGH_FACTOR)
+    if range_pct is not None and range_pct < MIN_RANGE_PCT:
+        best["note"] = "very tight range — levels are less meaningful here"
+
     for key, label, pts_at, pts_near in _SUPPORT_TIERS:
         lv = (levels or {}).get(key)
         if not lv:
@@ -616,9 +751,11 @@ def support_summary(levels: dict) -> dict:
             cand, tag = 1.5, f"at weak {label} low"
         else:
             continue
+        cand *= factor
         if cand > best["bonus"]:
             best = {"bonus": cand, "tag": tag, "tier": label,
-                    "dist": lv["dist"], "touches": lv["touches"]}
+                    "dist": lv["dist"], "touches": lv["touches"],
+                    "note": best.get("note")}
     return best
 
 
@@ -666,7 +803,8 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
            "vwap_note": None, "support_levels": None,
            "support_bonus": 0.0, "support_tag": None, "support_tier": None,
            "support_dist": None, "support_touches": None, "rel_strength": None,
-           "atr_daily": None}
+           "atr_daily": None, "range_pos": None, "range_pct": None,
+           "support_note": None}
     if ddf is None or len(ddf) < 20:
         return ctx
     if isinstance(ddf.columns, pd.MultiIndex):
@@ -694,7 +832,14 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
     try:
         sl = support_levels(ddf, price, intraday=intraday)
         ctx["support_levels"] = sl
-        summ = support_summary(sl)
+        # Where price sits in its RECENT range — from the intraday frame (last
+        # ~5 sessions) when we have it, else the last 10 daily bars. This is the
+        # guard that stops "at support" firing on a stock sitting at its highs.
+        rp, rw = (range_position(intraday) if intraday is not None and len(intraday) > 12
+                  else range_position(ddf.tail(10)))
+        ctx["range_pos"], ctx["range_pct"] = rp, rw
+        summ = support_summary(sl, range_pos=rp, range_pct=rw)
+        ctx["support_note"] = summ.get("note")
         ctx["support_bonus"] = summ["bonus"]
         ctx["support_tag"] = summ["tag"]
         ctx["support_tier"] = summ["tier"]

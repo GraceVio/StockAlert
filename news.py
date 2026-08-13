@@ -245,8 +245,6 @@ def market_news_text():
         tag = _emoji(l) + ("⚠️" if r else "")
         src = f"  <i>— {pub}</i>" if pub else ""
         lines.append(f"{tag} {t[:110]}{src}")
-    lines.append("\n<i>Rough automated read of headline wording — a quick mood "
-                 "glance, not a forecast. Read the stories before acting.</i>")
     return "\n".join(lines)
 
 
