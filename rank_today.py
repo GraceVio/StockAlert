@@ -7,13 +7,19 @@ tradable stocks (your watchlist + all sector-heatmap constituents, ~100 names)
 by how well each matches the edge we backtested, and show the best-qualified
 candidates *at this moment*. Re-run any time — it re-analyses live.
 
-0-100 FIT SCORE (higher = better match to the dip-in-uptrend edge):
-  Trend        25  price above its 50-EMA (uptrend), not over-extended
-  Dip / RSI    30  RSI near ~35 (the pullback we buy); penalised if >60 or falling
-  Turning up   15  RSI ticking back up (momentum returning)
-  Volume       15  above-average buying interest
-  Sector       10  its sector is trending up
-  Regime        5  broad market (SPY) healthy
+0-100 FIT SCORE. Every weight below was set by backtest, not opinion — see
+_score_100 for the numbers behind each one:
+  Dip / RSI    30  deep oversold is the real signal (RSI<30 = 56% win / +0.174 R)
+  Room to run  20  space to the next resistance (>=2R = 56% win / +0.179 R)
+  Support      20  at a tested floor (53% win / +0.109 R vs 50% / +0.048 away)
+  Trend         8  price vs its ~2-day trend line   (measured ~0 — small weight)
+  Turning up    4  RSI ticking back up              (measured ~0)
+  Sector        3  its sector trending up           (~0 alone…)
+  Sector fit    3  …but +0.045 R when it sits UNDER support
+  Regime        3  broad market (SPY) healthy
+  VWAP          3  mainly for its AVOID warnings    (measured ~0)
+  Volume        2  no monotonic signal              (measured ~0)
+  Rel. strength 1  measured ~0 three separate ways  (display cue only)
 Bands: 75+ strong fit · 60-74 good · 45-59 watch · <45 weak.
 A name that also meets our strict live-alert trigger is flagged ★ FIRING.
 
@@ -34,52 +40,74 @@ TOP_N = 10
 
 def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy,
                vwap_state=None, rel_strength=None, support_bonus=0.0,
-               support_tag=None):
-    """Score = dip-in-uptrend CORE (0-72) + quality ENHANCERS (0-28).
+               support_tag=None, upside=None):
+    """0-100 entry-quality score. EVERY weight is set from a backtest.
 
-    WEIGHTS RE-SET 2026-08-13 from a 6217-setup / 5-year factor test. What that
-    test actually found, per factor (avg R vs a +0.056 baseline):
-      AT TESTED SUPPORT  +0.102 R (53% win)  vs NOT at support -0.003 R (48%)
-          → the ONLY factor with a real, large edge → biggest enhancer (22).
-      VWAP (near / touched / slope-up / volume-confirmed)  all ≈ 0 or NEGATIVE
-          → weight cut to 4, kept mainly for its AVOID warnings (broke / chop).
-      Relative strength  ≈ 0  → cut to 2.
-    CORE (Trend 20 · Dip/RSI 27 · Turning-up 12 · Volume 7 · Sector 3 · Regime 3)
-    describes the setup shape; the honest caveat is that the core itself ranked
-    outcomes barely better than chance in the earlier 1240-setup test — so treat
-    the number as ENTRY QUALITY, not a profit forecast.
-    ENHANCERS are add-only — they lift excellent setups, never knock a good dip out.
-    Adjustments are smooth (no cliffs): an over-extended RSI is trimmed, and a
-    below-trend price gets a GRADUAL counter-trend haircut (bigger the further
-    below), so scores don't jump when price grazes the trend line."""
+    Measured effect on forward R (spread between the best and worst bucket of
+    each factor), all on 5 years of US large-caps, 1.5xATR stop / 1.5R target:
+      Room to run  +0.126   >=2R to resistance 56% win /+0.179 vs <2R 50% /+0.053
+      RSI < 30     +0.102   56% win / +0.174 R  (the mid "dip zone" is ~baseline)
+      Support      +0.061   at a tested floor 53% /+0.109 vs away 50% /+0.048
+      Sector fit   +0.045   only WHEN the rising sector sits under support
+      Trend        ~0       above vs below the trend line is a coin flip
+      Turning up   ~0       still-falling scored marginally BETTER
+      Volume       ~0       no monotonic signal; heavy volume was the wrong way
+      Rel.strength ~0       null on 21-day, 5-day, and leader/laggard splits
+      VWAP         ~0       kept for its AVOID states (broke / chop) only
+
+    Honest caveat that has survived every test: this ranks ENTRY QUALITY, it does
+    not forecast profit. The whole score spans roughly 50%-59% win rates. Stops
+    and 1% position sizing still matter more to the P&L than picking #1 over #5.
+    Enhancers are add-only — they lift good setups, never knock one out."""
     dist = (price / ema_val - 1) * 100 if ema_val else 0.0
     reasons = []
 
-    # ---------------- CORE edge (0-72) ----------------
-    # Trend (0-20): reward uptrend, fade as it gets over-extended above the EMA.
+    # ---------------- CORE edge (0-63) ----------------
+    # Trend (0-12): CUT from 20 on 2026-08-13. A 17329-setup test found the trend
+    # filter has NO measured edge at any horizon: above the 50-day trend 52% win /
+    # +0.040 R vs BELOW it 53% / +0.044 at a 2-day hold (and +0.064 vs +0.080 at
+    # 5 days). Same result for the fast ~2-day trend line. It was the 2nd-largest
+    # component of the score while predicting nothing, so its weight now reflects
+    # that. Kept (not removed) because a collapsing stock is still worse to hold.
     if price > ema_val:
-        trend = max(8.0, min(20.0, 20.0 - max(0.0, dist - 6.0) * 1.3))
-        reasons.append("uptrend")
+        trend = max(3.0, min(8.0, 8.0 - max(0.0, dist - 6.0) * 0.6))
+        reasons.append("above short-term trend")
     else:
-        trend = max(0.0, min(8.0, 8.0 + dist))     # dist is negative here
-        reasons.append("below trend")
+        trend = max(0.0, min(3.0, 3.0 + dist * 0.4))   # dist is negative here
+        reasons.append("below short-term trend")
 
-    # Dip / RSI zone (0-27): peaks at RSI ~35, fades for extended/falling-knife.
-    rsi_s = max(0.0, 27.0 - abs(rsi_now - 35.0) * 1.1)
+    # Dip / RSI (0-37). RE-SHAPED 2026-08-13 from a 23744-setup test: the edge is
+    # concentrated in DEEP oversold, not the mid dip zone the old curve peaked on.
+    #   RSI <30  56% win / +0.174 R  (+0.102 vs baseline)  <- the real signal
+    #   RSI 30-45 ~51-53% / +0.070-0.080 (≈ baseline)
+    #   RSI 45-60 / 60+  slightly BELOW baseline
+    # So: full credit under 30, a moderate slope to 45, then it fades away.
+    if rsi_now <= 30:
+        rsi_s = 30.0
+    elif rsi_now <= 45:
+        rsi_s = 30.0 - (rsi_now - 30.0) / 15.0 * 12.0      # 30 -> 18
+    elif rsi_now <= 60:
+        rsi_s = 18.0 - (rsi_now - 45.0) / 15.0 * 13.0      # 18 -> 5
+    else:
+        rsi_s = max(0.0, 5.0 - (rsi_now - 60.0) * 0.35)
     if 30 <= rsi_now <= 45:
         reasons.append("dip zone")
     elif rsi_now > 60:
         reasons.append("extended")
 
-    # RSI turning back up (0-12).
+    # RSI turning back up (0-6, CUT from 12). Tested: turning up +0.068 R vs still
+    # FALLING +0.076 — no edge, if anything backwards. Kept small because entering
+    # while a stock is still dropping is bad practice regardless of the average.
     if rsi_now > rsi_prev:
-        turn = min(12.0, (rsi_now - rsi_prev) * 2.6)
+        turn = min(4.0, (rsi_now - rsi_prev) * 1.2)
         reasons.append("turning up")
     else:
         turn = 0.0
 
-    # Volume (0-7): above-average buying interest confirms the bounce.
-    vol = min(7.0, max(0.0, (vol_ratio - 0.8) * 7.0))
+    # Volume (0-3, CUT from 7). Tested across 23744 setups: NO monotonic signal
+    # (0-0.7x +0.086 · 1.0-1.3x +0.061 · 1.3-1.8x +0.058) — rewarding heavy volume
+    # was, if anything, the wrong direction. Nearly zero weight now.
+    vol = min(2.0, max(0.0, (vol_ratio - 0.8) * 2.0))
     if vol_ratio >= 1.3:
         reasons.append(f"vol {vol_ratio:.1f}x")
 
@@ -92,13 +120,14 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
         sec = 1.5
     reg = 3.0 if healthy else 0.0
 
-    core = trend + rsi_s + turn + vol + sec + reg          # up to 72
+    core = trend + rsi_s + turn + vol + sec + reg          # up to 64
 
-    # -------------- ENHANCERS (0-28, add-only) --------------
-    # At a TESTED support floor (0-22): by far the STRONGEST factor measured
-    # (+0.102 R at support vs -0.003 R away from it). Bonus + timeframe tag are
-    # precomputed by scanner.support_summary. Away = 0 (no penalty).
-    supp = min(22.0, support_bonus or 0.0)
+    # -------------- ENHANCERS (0-33, add-only) --------------
+    # At a TESTED support floor (0-24). REDUCED from 28: on the same 23744-setup
+    # sample support's effect (+0.061 R spread) is real but MODEST — and there are
+    # three tiers, none right every time. It is still the strongest broad factor,
+    # just no longer allowed to dominate the score on its own.
+    supp = min(20.0, support_bonus or 0.0)
     if support_tag:
         reasons.append(support_tag)
 
@@ -106,7 +135,7 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     # from above (a "bounce", +0.16R / 57% win), NOT merely above it. Stretched,
     # broken-below and chop were all losers → 0 bonus + a warning tag.
     if vwap_state == "bounce":
-        vwap_s = 4.0; reasons.append("🎯 bounce at VWAP")
+        vwap_s = 3.0; reasons.append("🎯 bounce at VWAP")
     elif vwap_state == "above":
         vwap_s = 1.5; reasons.append("above VWAP")
     elif vwap_state == "far_above":
@@ -120,17 +149,38 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     else:
         vwap_s = 1.5
 
-    # Relative strength (0-2): tiny weight — measured ≈ zero effect on outcomes.
+    # Relative strength (0-1): measured ≈ ZERO three separate times (21-day RS,
+    # 5-day RS vs SPY, and leader/laggard splits). Kept only as a display cue.
     if rel_strength is None:
-        rs = 1.0
-    elif rel_strength >= 5:
-        rs = 2.0; reasons.append("market leader")
-    elif rel_strength >= 0:
-        rs = 1.5
-    elif rel_strength >= -5:
         rs = 0.5
+    elif rel_strength >= 5:
+        rs = 1.0; reasons.append("market leader")
+    elif rel_strength >= 0:
+        rs = 0.75
+    elif rel_strength >= -5:
+        rs = 0.25
     else:
         rs = 0.0; reasons.append("lagging market")
+
+    # ROOM TO RUN (0-20): distance to the next overhead resistance, in R. The
+    # STRONGEST factor measured (15942 setups): >=2R → 56% win / +0.179 R vs
+    # <2R → 50% / +0.053, and it rises monotonically (2.5-4R = 59% / +0.218).
+    # A dip at support is worthless if a ceiling sits right above the entry.
+    room = (upside or {}).get("room_r")
+    if room is None:
+        space = 10.0                       # unknown → neutral
+    elif room >= 2.5:
+        space = 20.0; reasons.append(f"🚀 clear run ({min(room,9.9):.1f}R to resistance)")
+    elif room >= 2.0:
+        space = 16.0; reasons.append(f"room to run ({room:.1f}R)")
+    elif room >= 1.5:
+        space = 11.0
+    elif room >= 1.0:
+        space = 7.0
+    elif room >= 0.5:
+        space = 3.0; reasons.append(f"⚠️ resistance close ({room:.1f}R)")
+    else:
+        space = 0.0; reasons.append(f"⚠️ capped by resistance ({room:.1f}R above)")
 
     # Sector ALIGNMENT bonus (0-3). Sector trend on its own is worthless
     # (uptrend +0.059 R vs downtrend +0.078 — no edge, tested on 3937 setups), so
@@ -143,7 +193,7 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
         align = 3.0
         reasons.append("✅ sector rising under support")
 
-    total = core + supp + vwap_s + rs + align
+    total = core + supp + vwap_s + rs + align + space
 
     # -------------- smooth honesty adjustments --------------
     if rsi_now > 60:
@@ -153,10 +203,10 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
         total *= (1.0 - min(0.15, below * 0.03))   # gradual counter-trend haircut
         reasons.append("counter-trend risk")
 
-    parts = {"Trend": (trend, 20), "Dip/RSI": (rsi_s, 27), "Turning up": (turn, 12),
-             "Volume": (vol, 7), "Sector": (sec, 3), "Regime": (reg, 3),
-             "Support +": (supp, 22), "VWAP +": (vwap_s, 4), "Rel.str +": (rs, 2),
-             "Sector fit +": (align, 3)}
+    parts = {"Trend": (trend, 8), "Dip/RSI": (rsi_s, 30), "Turning up": (turn, 4),
+             "Volume": (vol, 2), "Sector": (sec, 3), "Regime": (reg, 3),
+             "Room to run": (space, 20), "Support +": (supp, 20),
+             "VWAP +": (vwap_s, 3), "Rel.str +": (rs, 1), "Sector fit +": (align, 3)}
 
     return int(round(max(0.0, min(100.0, total)))), reasons, parts
 
@@ -198,7 +248,8 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
     score, reasons, parts = _score_100(
         price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy,
         vwap_state=ctx.get("vwap_state"), rel_strength=ctx.get("rel_strength"),
-        support_bonus=ctx.get("support_bonus", 0.0), support_tag=ctx.get("support_tag"))
+        support_bonus=ctx.get("support_bonus", 0.0), support_tag=ctx.get("support_tag"),
+        upside=ctx.get("upside"))
     firing = bool(price > ema_val and rsi_prev <= s.RSI_OVERSOLD and rsi_now > rsi_prev)
 
     # ATR-based stop → 1%-rule position size. Prefer DAILY ATR (realistic for a
@@ -235,7 +286,7 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
         "rel_strength": ctx.get("rel_strength"),
         "range_pos": ctx.get("range_pos"), "range_pct": ctx.get("range_pct"),
         "support_note": ctx.get("support_note"),
-        "sector": s.sector_info(ticker),
+        "sector": s.sector_info(ticker), "upside": ctx.get("upside"),
         "turning_up": rsi_now > rsi_prev,
     }
 
@@ -322,6 +373,20 @@ def _support_line(r) -> str:
             bits.append(f"↗️ Slightly beating the market ({rsx:+.0f}%, 1 month)")
         else:
             bits.append(f"🐌 Lagging the market ({rsx:+.0f}%, 1 month)")
+    up = r.get("upside") or {}
+    if up.get("room_r") is not None:
+        rr, lvl = up["room_r"], up.get("level")
+        if lvl:
+            if rr >= 2.0:
+                bits.append(f"🚀 <b>Room to run</b>: next resistance {lvl:.2f} {cur} "
+                            f"({up['pct']:+.1f}%) = <b>{min(rr,9.9):.1f}R</b> of upside "
+                            "— target is reachable")
+            else:
+                bits.append(f"⚠️ <b>Overhead resistance</b> {lvl:.2f} {cur} "
+                            f"({up['pct']:+.1f}%) = only <b>{rr:.1f}R</b> — the target "
+                            "is blocked before you get there")
+        else:
+            bits.append("🚀 <b>Room to run</b>: no resistance overhead (clear sky)")
     sec = r.get("sector")
     if sec:
         arrow = "🟢" if sec["strong"] and sec["month"] > 0 else "🔴"
@@ -668,6 +733,15 @@ def format_ranking(rows, healthy: bool = True) -> str:
                 tags.append(f"▫️ above a {tier} level (not a dip)")
             elif stag.startswith("near"):
                 tags.append(f"🧱 near {tier} support{d}")
+        up = r.get("upside") or {}
+        room = up.get("room_r")
+        if room is not None:
+            if room >= 2.5:
+                tags.append(f"🚀 <b>clear run</b> ({min(room,9.9):.1f}R to resistance)")
+            elif room >= 2.0:
+                tags.append(f"🚀 room to run ({room:.1f}R)")
+            elif room < 1.0:
+                tags.append(f"⚠️ <b>resistance {room:.1f}R above</b> — target blocked")
         rpos = r.get("range_pos")
         if rpos is not None and rpos > 55:
             tags.append(f"📍 {rpos:.0f}% of range (near highs)")
@@ -686,13 +760,16 @@ def format_ranking(rows, healthy: bool = True) -> str:
 
         # The other scoring factors, short but complete, so the ranking itself
         # says WHY a name is here (no need to open /score to decide).
-        setup = ["📈 uptrend" if r["uptrend"] else "📉 below trend"]
+        # Name the SOURCE of each factor — "uptrend" alone read like an RSI thing,
+        # but it is price vs its 50-EMA, which is a different signal from RSI.
+        # "50-EMA" read like 50 DAYS; it is 50 x 15-min bars ≈ 2 trading days.
+        setup = ["📈 above 2-day trend" if r["uptrend"] else "📉 below 2-day trend"]
         if r["rsi"] <= 45:
             setup.append("dip zone")
         elif r["rsi"] > 60:
             setup.append("extended")
         if r.get("turning_up"):
-            setup.append("turning up ↗")
+            setup.append("RSI ↗ turning up")
         vr = r.get("vol_ratio")
         if vr:
             setup.append(f"vol {vr:.1f}×")
@@ -713,9 +790,9 @@ def format_ranking(rows, healthy: bool = True) -> str:
                 heat = f"🧊 #{rk}/{of} coldest today"
             else:
                 heat = f"#{rk}/{of} today" if rk else ""
-            trend = "🟢 trend up" if (sec["strong"] and sec["month"] > 0) else "🔴 trend weak"
-            sec_line = (f"\n   {sec['name']} <b>{sec['day']:+.1f}%</b> today "
-                        f"({heat}) · {sec['month']:+.1f}% 1mo {trend}")
+            # Prefixed "Sector:" so these %% are never mistaken for the stock's own.
+            sec_line = (f"\n   Sector {sec['name']}: <b>{sec['day']:+.1f}%</b> today "
+                        f"({heat}) · {sec['month']:+.1f}% 1mo")
 
         lines.append(
             f"<b>{i}. {title}</b> — <b>{r['score']}/100</b> {_band(r['score'])}{star}\n"
@@ -723,9 +800,9 @@ def format_ranking(rows, healthy: bool = True) -> str:
             f"{setup_line}{tag_line}{sec_line}"
         )
         lines.append("")   # blank line between setups for readability
-    lines.append("<i>🧱 at support + 📈 uptrend + dip + 🟢 sector = the strongest mix · "
-                 "⚠️ = avoid · 📍 over 55% of range = chasing · ★ = live trigger.\n"
-                 "Position size, stop &amp; target: /score SYM</i>")
+    lines.append("<i>Best mix (what actually tested strong): <b>RSI under 30</b> + "
+                 "🧱 at tested support · ⚠️ = avoid · 📍 over 55% of range = chasing · "
+                 "★ = live trigger.\nPosition size, stop &amp; target: /score SYM</i>")
     return "\n".join(lines)
 
 

@@ -594,6 +594,64 @@ def tradeable_bars(df: pd.DataFrame):
     return live if len(live) >= 12 else d      # keep the frame usable if too thin
 
 
+def _pivot_highs_ts(high: pd.Series, k: int):
+    """Local tops as (position, price) — the mirror of _pivot_lows_ts."""
+    v = high.values
+    return [(i, float(v[i])) for i in range(k, len(v) - k)
+            if v[i] == v[i - k:i + k + 1].max()]
+
+
+def _resistance_above(pivots, price: float, tol: float = 0.015):
+    """Nearest clustered swing-high ABOVE the price — the first ceiling a bounce
+    would run into. {level, touches} or None."""
+    above = [l for _, l in pivots if l and l == l and l > price * 1.001]
+    if not above:
+        return None
+    clusters = []
+    for lvl in sorted(above):
+        for c in clusters:
+            if abs(lvl - c["lvl"]) / c["lvl"] <= tol:
+                c["ls"].append(lvl); c["lvl"] = sum(c["ls"]) / len(c["ls"]); break
+        else:
+            clusters.append({"lvl": lvl, "ls": [lvl]})
+    nr = min(clusters, key=lambda c: c["lvl"])
+    return {"level": nr["lvl"], "touches": len(nr["ls"])}
+
+
+def upside_space(daily: pd.DataFrame, price: float, atr_val: float):
+    """ROOM TO RUN before the next overhead resistance, measured in R (units of
+    the 1.5xATR stop). This was the STRONGEST factor measured (15942 setups):
+        room >= 2R  → 56% win / +0.179 R
+        room <  2R  → 50% win / +0.053 R   (0-0.5R was the worst at +0.034)
+    A perfect dip at support is still a bad trade if a ceiling sits just above it,
+    because the target simply cannot be reached. Returns
+    {level, room_r, pct, touches} or None when there is no resistance overhead
+    (i.e. clear blue sky above — treated as maximum room)."""
+    if daily is None or not atr_val or atr_val <= 0 or len(daily) < 40:
+        return None
+    d = daily
+    if isinstance(d.columns, pd.MultiIndex):
+        d = d.copy(); d.columns = d.columns.get_level_values(0)
+    d = d.dropna(subset=["High"]).tail(126)          # ~6 months, same as support
+    try:
+        piv = _pivot_highs_ts(d["High"], 4)
+        # A pivot needs 4 bars either side to confirm, so the MOST RECENT high —
+        # usually the peak price just fell away from, i.e. the resistance that
+        # matters most — is structurally invisible. Add it back as a candidate.
+        recent = d["High"].tail(12)
+        if len(recent):
+            piv = piv + [(len(d) - 1, float(recent.max()))]
+        res = _resistance_above(piv, price)
+    except Exception:
+        return None
+    if not res:
+        return {"level": None, "room_r": 99.0, "pct": None, "touches": 0}
+    room = (res["level"] - price) / (ATR_STOP_MULT * atr_val)
+    return {"level": res["level"], "room_r": room,
+            "pct": (res["level"] - price) / price * 100.0,
+            "touches": res["touches"]}
+
+
 def range_position(df: pd.DataFrame):
     """Where the current price sits inside its recent high-low range, 0-100.
     0 = at the lows (a real pullback), 100 = at the highs (chasing).
@@ -735,9 +793,9 @@ def support_levels(daily: pd.DataFrame, price: float, intraday=None) -> dict:
 # (0.5 ATR ≈ 1.1% on a typical stock — matching the "~1%" intuition).
 # (key, label, bonus_at, bonus_near, atr_at, atr_near)
 _SUPPORT_TIERS = [
-    ("long",   "long-term",   22.0, 11.0, 1.0, 2.0),
-    ("medium", "medium-term", 17.0,  8.5, 1.0, 2.0),
-    ("short",  "short-term",  12.0,  6.0, 0.5, 1.0),
+    ("long",   "long-term",   24.0, 12.0, 1.0, 2.0),
+    ("medium", "medium-term", 19.0,  9.5, 1.0, 2.0),
+    ("short",  "short-term",  13.0,  6.5, 0.5, 1.0),
 ]
 SUPPORT_HIDE_ATR = 2.0     # further than this → not shown at all
 
@@ -877,7 +935,7 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
            "support_bonus": 0.0, "support_tag": None, "support_tier": None,
            "support_dist": None, "support_touches": None, "rel_strength": None,
            "atr_daily": None, "range_pos": None, "range_pct": None,
-           "support_note": None}
+           "support_note": None, "upside": None}
     if ddf is None or len(ddf) < 20:
         return ctx
     if isinstance(ddf.columns, pd.MultiIndex):
@@ -923,6 +981,10 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
         ctx["range_pos"], ctx["range_pct"] = rp, rw
         summ = support_summary(sl, range_pos=rp, range_pct=rw)
         ctx["support_note"] = summ.get("note")
+    except Exception:
+        pass
+    try:
+        ctx["upside"] = upside_space(ddf, price, ctx.get("atr_daily"))
         ctx["support_bonus"] = summ["bonus"]
         ctx["support_tag"] = summ["tag"]
         ctx["support_tier"] = summ["tier"]
@@ -1099,6 +1161,46 @@ SECTOR_MAP = {
     "XOM": "Energy", "CVX": "Energy", "SHELL.AS": "Energy",
     "SIE.DE": "Industrials", "AIR.DE": "Industrials",
 }
+
+# 2026-08-13: 40% of the rank universe (63 names) had NO sector, so most /rank
+# cards showed no sector line at all. Filled in below.
+# NOTE ON EU NAMES: sector strength is measured from the US SPDR sector ETFs, so
+# for European tickers the sector NAME is right but the daily % is a US proxy for
+# that sector's rotation — close enough to answer "is my sector hot today", not a
+# measurement of the European sector itself.
+SECTOR_MAP.update({
+    # --- US technology & software
+    "TXN": "Technology", "ANET": "Technology", "PANW": "Technology",
+    "CRWD": "Technology", "SNOW": "Technology", "ZS": "Technology",
+    "TEAM": "Technology", "DDOG": "Technology", "SHOP": "Technology",
+    "HPE": "Technology", "ALAB": "Technology", "RBRK": "Technology",
+    "NBIS": "Technology", "CRWV": "Technology", "IREN": "Technology",
+    "IONQ": "Technology", "QBTS": "Technology", "RGTI": "Technology",
+    "NVTS": "Technology", "TTD": "Technology",
+    # --- US health care
+    "AMGN": "Health Care", "GILD": "Health Care", "PFE": "Health Care",
+    "PODD": "Health Care",
+    # --- US financials (PYPL/COIN/HOOD/SOFI/UPST are GICS Financials)
+    "PYPL": "Financials", "COIN": "Financials", "HOOD": "Financials",
+    "SOFI": "Financials", "UPST": "Financials", "SNEX": "Financials",
+    # --- US industrials / consumer / comms
+    "DE": "Industrials", "LMT": "Industrials", "UBER": "Industrials",
+    "RCAT": "Industrials",
+    "SBUX": "Consumer Disc.", "LOW": "Consumer Disc.", "ABNB": "Consumer Disc.",
+    "RDDT": "Comm. Services",
+    "CRML": "Materials",
+    # --- Europe (sector name accurate; % is the US sector ETF as proxy)
+    "RHM.DE": "Industrials", "ENR.DE": "Industrials", "DHL.DE": "Industrials",
+    "MBG.DE": "Consumer Disc.", "BMW.DE": "Consumer Disc.",
+    "VOW3.DE": "Consumer Disc.", "ADS.DE": "Consumer Disc.",
+    "DBK.DE": "Financials", "MUV2.DE": "Financials", "ADYEN.AS": "Financials",
+    "BAS.DE": "Materials", "SDF.DE": "Materials",
+    "BAYN.DE": "Health Care", "AZN.L": "Health Care", "SAN.PA": "Health Care",
+    "GXI.DE": "Health Care",
+    "NESN.SW": "Consumer Staples",
+    "TTE.PA": "Energy",
+    "SMHN.DE": "Technology",
+})
 
 # Example constituents per sector (liquid US large-caps, all buyable on Trade
 # Republic). Used for the /sector drill-down AND to widen the /rank universe so
