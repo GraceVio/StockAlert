@@ -17,6 +17,7 @@ Source: yfinance `.news` (free). No API key.
 """
 
 import re
+import datetime as _dt
 import scanner as s
 
 # Finance-aware keyword lexicons (matched on whole words, case-insensitive).
@@ -106,13 +107,33 @@ def _emoji(lean):
     return {"pos": "🟢", "neg": "🔴", "neu": "⚪"}.get(lean, "⚪")
 
 
-def _raw_news(ticker, limit=6, relevant_to=None):
+def _age_hours(content, item):
+    """Age of a yfinance news item in hours, or None if no parseable date."""
+    raw = (content.get("pubDate") or content.get("displayTime")
+           or item.get("providerPublishTime"))
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, (int, float)):          # epoch seconds
+            pub = _dt.datetime.fromtimestamp(raw, _dt.timezone.utc)
+        else:                                       # ISO string, e.g. 2026-08-13T09:48:00Z
+            pub = _dt.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=_dt.timezone.utc)
+        return (_dt.datetime.now(_dt.timezone.utc) - pub).total_seconds() / 3600.0
+    except Exception:
+        return None
+
+
+def _raw_news(ticker, limit=6, relevant_to=None, max_age_hours=None):
     """Pull headlines for a ticker from yfinance (handles both news formats),
     returning (title, publisher, summary) tuples.
 
     If `relevant_to=(symbol, name)` is given, keep ONLY stories that actually
     name that company (title or summary) — yfinance's per-ticker feed mixes in
-    loosely-related sector/peer stories, which aren't useful for a single stock."""
+    loosely-related sector/peer stories, which aren't useful for a single stock.
+    `max_age_hours` drops anything older than that (items with no parseable date
+    are kept, so a missing timestamp never silently empties the feed)."""
     try:
         items = s.yf.Ticker(ticker).news or []
     except Exception:
@@ -128,25 +149,36 @@ def _raw_news(ticker, limit=6, relevant_to=None):
         pub = (c.get("provider", {}) or {}).get("displayName") or n.get("publisher") or ""
         if terms is not None and not _is_relevant(title, summ, terms):
             continue
+        if max_age_hours is not None:
+            age = _age_hours(c, n)
+            if age is not None and age > max_age_hours:
+                continue
         out.append((title, pub, summ))
         if len(out) >= limit:
             break
     return out
 
 
-def _company_headlines(ticker, limit=6):
-    """Company-specific headlines as (title, source, summary) tuples.
+# Only news this fresh is shown — Grace: older headlines aren't tradeable.
+NEWS_MAX_AGE_HOURS = 24
+
+
+def _company_headlines(ticker, limit=6, max_age_hours=NEWS_MAX_AGE_HOURS):
+    """Company-specific headlines as (title, source, summary) tuples, newest
+    first, no older than `max_age_hours`.
     Prefers Finnhub /company-news (genuinely per-company, US/NA + a free key);
     falls back to yfinance filtered to stories that actually name the company."""
     name = s.name_for(ticker)
     try:
         import finnhub_data as fh
-        fn = fh.company_news(ticker, days=10, limit=limit)
+        fn = fh.company_news(ticker, days=3, limit=limit,
+                             max_age_hours=max_age_hours)
         if fn:
             return [(x["headline"], x["source"], x["summary"]) for x in fn]
     except Exception:
         pass
-    return _raw_news(ticker, limit=limit, relevant_to=(ticker, name))
+    return _raw_news(ticker, limit=limit, relevant_to=(ticker, name),
+                     max_age_hours=max_age_hours)
 
 
 def _lean_from(headlines):

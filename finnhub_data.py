@@ -47,10 +47,13 @@ def _get(path: str, params: dict):
     return None
 
 
-def company_news(ticker: str, days: int = 10, limit: int = 8):
+def company_news(ticker: str, days: int = 3, limit: int = 8, max_age_hours=None):
     """Recent company-specific headlines (US/NA only) via /company-news, newest
     first. Returns [{headline, summary, source, url, dt}] or [] when
-    unavailable (no key / non-US / error)."""
+    unavailable (no key / non-US / error).
+
+    `max_age_hours` (e.g. 24) drops anything older than that, using each item's
+    own publish time — so only genuinely fresh news is shown."""
     if not _is_us(ticker):
         return []
     today = dt.date.today()
@@ -59,14 +62,20 @@ def company_news(ticker: str, days: int = 10, limit: int = 8):
                                   "from": frm, "to": today.isoformat()})
     if not isinstance(data, list):
         return []
+    cutoff = None
+    if max_age_hours:
+        cutoff = dt.datetime.now(dt.timezone.utc).timestamp() - max_age_hours * 3600
     out = []
     for n in data:
         h = n.get("headline")
         if not h:
             continue
+        ts = n.get("datetime")
+        if cutoff is not None and (not ts or ts < cutoff):
+            continue
         out.append({"headline": h, "summary": n.get("summary") or "",
                     "source": n.get("source") or "", "url": n.get("url") or "",
-                    "dt": n.get("datetime")})
+                    "dt": ts})
         if len(out) >= limit:
             break
     return out
