@@ -95,6 +95,16 @@ ATR_LEN           = 14
 ATR_STOP_MULT     = 1.5     # stop = entry - 1.5 * ATR
 RR_TARGET         = 3.0     # NORMAL mode target (multi-day/week holds)
 RR_FAST           = 1.5     # FAST mode target (hours–2 day holds; higher hit-rate)
+# WIDE mode, added 2026-08-13 after the stop-width test (27336 setups). Identical
+# entries, three exit plans — a wider stop nearly TRIPLED average return because a
+# 1.5xATR stop treats ordinary noise as a failed trade:
+#   1.5 ATR / 1.5R / 5d  -> +0.055 R   (falling+oversold 57% win / +0.174)
+#   2.5 ATR / 3R  / 15d  -> +0.128 R   (falling+oversold 58% win / +0.216)
+#   3.0 ATR / 4R  / 25d  -> +0.153 R   (falling+oversold 55% win / +0.241)
+# Same 1% risk per trade either way — the position size shrinks as the stop widens,
+# so this is a real gain in expectancy, paid for with a longer hold.
+RR_WIDE           = 3.0
+ATR_STOP_WIDE     = 2.5
 EXTENDED_HOURS    = True     # include pre-/after-market bars (you trade extended
                             # hours on Trade Republic) — keeps prices current, but
                             # off-session volume is thin so signals are a bit noisier
@@ -935,7 +945,7 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
            "support_bonus": 0.0, "support_tag": None, "support_tier": None,
            "support_dist": None, "support_touches": None, "rel_strength": None,
            "atr_daily": None, "range_pos": None, "range_pct": None,
-           "support_note": None, "upside": None}
+           "support_note": None, "upside": None, "trend_heat": None}
     if ddf is None or len(ddf) < 20:
         return ctx
     if isinstance(ddf.columns, pd.MultiIndex):
@@ -985,6 +995,49 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
         pass
     try:
         ctx["upside"] = upside_space(ddf, price, ctx.get("atr_daily"))
+    except Exception:
+        pass
+    try:
+        # Short-horizon trend context (1 week / 1 month, plus how STEADY the climb
+        # is). Shown so the dip can be judged against the bigger picture; only the
+        # 1-week leg feeds the score, because it is the only one that tested
+        # positive next to a dip.
+        c = ddf["Close"].dropna()
+        th = {"week": None, "month": None, "smooth": None, "rsi_pct": None,
+              "pull_atr": None}
+        if len(c) > 6:
+            th["week"] = (price / float(c.iloc[-6]) - 1) * 100.0
+        if len(c) > 22:
+            th["month"] = (price / float(c.iloc[-22]) - 1) * 100.0
+        if len(c) > 21:
+            y = [float(v) for v in c.iloc[-21:].values]
+            n = len(y); xs = list(range(n))
+            mx = sum(xs) / n; my = sum(y) / n
+            sx = sum((a - mx) ** 2 for a in xs) ** .5
+            sy = sum((b - my) ** 2 for b in y) ** .5
+            if sx and sy:
+                th["smooth"] = sum((a - mx) * (b - my) for a, b in zip(xs, y)) / (sx * sy)
+        # How far price has pulled back from its 10-day high, in ATR — a
+        # VOLATILITY-RELATIVE depth, so a "shallow dip" means the same thing on a
+        # quiet stock and a wild one.
+        av = ctx.get("atr_daily")
+        if av and av > 0 and len(c) > 10:
+            th["pull_atr"] = (float(c.iloc[-10:].max()) - price) / av
+        # RSI measured against its OWN recent range instead of a fixed number.
+        # This is the fix that made Grace's "buy the dip inside a climb" idea
+        # testable: a clean uptrend never reaches RSI 45, but it DOES drop to the
+        # bottom of its own range, and that is where the edge showed up
+        # (steady climb + RSI in its own lower third = 52% win / +0.109 R).
+        try:
+            rs_ser = rsi(c, RSI_LEN).dropna()
+            if len(rs_ser) > 20:
+                w = rs_ser.iloc[-20:]
+                lo, hi = float(w.min()), float(w.max())
+                if hi > lo:
+                    th["rsi_pct"] = (float(rs_ser.iloc[-1]) - lo) / (hi - lo) * 100.0
+        except Exception:
+            pass
+        ctx["trend_heat"] = th
         ctx["support_bonus"] = summ["bonus"]
         ctx["support_tag"] = summ["tag"]
         ctx["support_tier"] = summ["tier"]
@@ -1048,12 +1101,12 @@ MODE_FILE = "mode.txt"
 
 def load_mode() -> str:
     env = os.environ.get("TRADE_MODE", "").strip().lower()
-    if env in ("fast", "normal"):
+    if env in ("fast", "normal", "wide"):
         return env
     try:
         if os.path.exists(MODE_FILE):
             m = open(MODE_FILE, "r", encoding="utf-8").read().strip().lower()
-            if m in ("fast", "normal"):
+            if m in ("fast", "normal", "wide"):
                 return m
     except Exception:
         pass
@@ -1067,11 +1120,27 @@ def save_mode(mode: str):
 
 def active_rr() -> float:
     """Reward:risk target for the current mode."""
-    return RR_FAST if load_mode() == "fast" else RR_TARGET
+    m = load_mode()
+    if m == "fast":
+        return RR_FAST
+    if m == "wide":
+        return RR_WIDE
+    return RR_TARGET
+
+
+def active_stop_mult() -> float:
+    """ATR multiple for the stop. WIDE mode gives the trade room to breathe —
+    the tested reason its expectancy is ~2.3x the tight plan's."""
+    return ATR_STOP_WIDE if load_mode() == "wide" else ATR_STOP_MULT
 
 
 def mode_horizon() -> str:
-    return "hours–2 days" if load_mode() == "fast" else "days–weeks"
+    m = load_mode()
+    if m == "fast":
+        return "hours–2 days"
+    if m == "wide":
+        return "1–3 weeks (give it room)"
+    return "days–weeks"
 
 
 def risk_position(price: float, currency: str, stop_pct: float,

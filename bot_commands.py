@@ -40,7 +40,9 @@ API     = f"https://api.telegram.org/bot{TOKEN}"
 
 HELP = (
     "🤖 <b>Commands</b>\n"
-    "/rank — 👑 King Stocks: best-qualified setups right now\n"
+    "/mood — 📊 market mood NOW: risk-on/off, hot &amp; cold sectors, movers\n"
+    "/hot — 🔥 where money is moving today (momentum, not dip-buying)\n"
+    "/rank — 👑 King Stocks: best DIP-BUY setups right now\n"
     "/score SYM [SYM …] — 🔎 fit score (0-100) + support, VWAP &amp; size\n"
     "/find NAME — 🔍 find a ticker by company name\n"
     "/scan — run the dip-in-uptrend scan now\n"
@@ -64,7 +66,9 @@ HELP = (
 # via setMyCommands, so the menu always matches the handlers below. Descriptions
 # must be plain text (no HTML/emoji markup), 1-256 chars.
 COMMAND_MENU = [
-    ("rank",      "King Stocks — best setups right now"),
+    ("mood",      "Market mood now: risk-on/off, hot sectors"),
+    ("hot",       "Where money is moving today (momentum)"),
+    ("rank",      "King Stocks — best dip-buy setups now"),
     ("score",     "Fit score 0-100 for a stock (e.g. NVDA)"),
     ("find",      "Find a ticker by company name"),
     ("scan",      "Run the dip-in-uptrend scan now"),
@@ -405,19 +409,27 @@ def _do_mode(arg: str):
     cur = s.load_mode()
     if not arg:
         return (f"⏱ <b>Trade mode: {cur}</b>\n\n"
-                f"• <b>fast</b> — {s.RR_FAST:g}R target, hours–2 days "
-                f"(higher win-rate, quick trades)\n"
-                f"• <b>normal</b> — {s.RR_TARGET:g}R target, days–weeks "
-                f"(bigger winners)\n\n"
-                f"<i>Same ranking either way — only the target &amp; hold time change.</i>\n"
-                f"Switch: <code>/mode fast</code> or <code>/mode normal</code>")
+                f"• <b>fast</b> — {s.ATR_STOP_MULT:g}×ATR stop, {s.RR_FAST:g}R target, "
+                f"hours–2 days (quick, tight)\n"
+                f"• <b>normal</b> — {s.ATR_STOP_MULT:g}×ATR stop, {s.RR_TARGET:g}R target, "
+                f"days–weeks\n"
+                f"• <b>wide</b> — <b>{s.ATR_STOP_WIDE:g}×ATR stop</b>, {s.RR_WIDE:g}R target, "
+                f"1–3 weeks\n\n"
+                f"📊 <b>Backtest (27,336 setups, same entries):</b>\n"
+                f"   fast/normal stop → <b>+0.055R</b> per trade\n"
+                f"   wide stop        → <b>+0.128R</b> per trade\n"
+                f"<i>A tight stop treats normal wobble as a failed trade. Wide risks the "
+                f"same 1% (you just buy fewer shares) but needs patience — you hold "
+                f"longer and lose more often in a row.</i>\n"
+                f"Switch: <code>/mode fast</code> · <code>/mode normal</code> · "
+                f"<code>/mode wide</code>")
     a = arg.strip().lower()
-    if a not in ("fast", "normal"):
-        return "Usage: /mode fast   or   /mode normal"
+    if a not in ("fast", "normal", "wide"):
+        return "Usage: /mode fast   or   /mode normal   or   /mode wide"
     s.save_mode(a)
-    rr = s.RR_FAST if a == "fast" else s.RR_TARGET
-    return (f"✅ Trade mode set to <b>{a}</b> — {rr:g}R target, aim to exit within "
-            f"{s.mode_horizon()}.\n<i>Resets on restart unless you set a TRADE_MODE secret.</i>")
+    return (f"✅ Trade mode set to <b>{a}</b> — {s.active_stop_mult():g}×ATR stop, "
+            f"{s.active_rr():g}R target, aim to exit within {s.mode_horizon()}.\n"
+            f"<i>Resets on restart unless you set a TRADE_MODE secret.</i>")
 
 
 def _do_diag():
@@ -489,6 +501,12 @@ def handle(text: str):
         return _do_account(arg)
     if cmd == "/mode":
         return _do_mode(arg)
+    if cmd == "/mood":
+        import market_mood as mm
+        return mm.mood_text()
+    if cmd == "/hot":
+        import market_mood as mm
+        return mm.hot_text()
     if cmd == "/rank":
         _reply("👑 Analysing the watchlist live… one moment.")
         rk.run(send=True)

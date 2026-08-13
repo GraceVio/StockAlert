@@ -40,7 +40,7 @@ TOP_N = 10
 
 def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy,
                vwap_state=None, rel_strength=None, support_bonus=0.0,
-               support_tag=None, upside=None):
+               support_tag=None, upside=None, trend_heat=None):
     """0-100 entry-quality score. EVERY weight is set from a backtest.
 
     Measured effect on forward R (spread between the best and worst bucket of
@@ -127,7 +127,7 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     # sample support's effect (+0.061 R spread) is real but MODEST — and there are
     # three tiers, none right every time. It is still the strongest broad factor,
     # just no longer allowed to dominate the score on its own.
-    supp = min(20.0, support_bonus or 0.0)
+    supp = min(18.0, support_bonus or 0.0)
     if support_tag:
         reasons.append(support_tag)
 
@@ -162,6 +162,54 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     else:
         rs = 0.0; reasons.append("lagging market")
 
+    # RECENT-WEEK STRENGTH (0-3). The ONLY trend variant that tested POSITIVE
+    # alongside a dip: week-up + dip 54% win / +0.109 R vs week-down + dip 52% /
+    # +0.085. Deliberately small. Everything longer FAILED: dip + month-up 49% /
+    # +0.073 (worse than dip + month-down), and a dip inside a STEADY CLIMB was
+    # the worst bucket of all (43% win / -0.081 R). So "hot" does NOT earn score
+    # here — this bot's edge is mean reversion, and momentum is a separate
+    # strategy that lives in /hot.
+    th = trend_heat or {}
+    wk = th.get("week")
+    if wk is None:
+        wkpts = 1.5
+    elif wk > 0:
+        wkpts = 3.0
+    else:
+        wkpts = 1.0
+
+    # PULLBACK INSIDE A CLIMB (0-8) — Grace's idea, and it holds up once the dip
+    # is measured RELATIVE to the stock's own range instead of a fixed RSI level.
+    # A clean climber never reaches RSI 45, which is why the first test wrongly
+    # said the setup "doesn't exist". Measured properly (27944 setups):
+    #   steady climb (LRcorr>0.7) + RSI in its own lower third → 52% win /+0.109 R
+    #   steady climb + pullback 1.5-3 ATR                      → 52% win /+0.096 R
+    #   steady climb sitting AT its highs (no pullback)        → 49% win /+0.042 ✗
+    # Note it is the PULLBACK that pays, not the heat: momentum RANK alone was
+    # flat (top 20% +0.049 vs bottom 20% +0.068), so "hot" only counts here when
+    # the stock has actually stepped back.
+    smooth = th.get("smooth")
+    rsi_pct = th.get("rsi_pct")
+    pull = th.get("pull_atr")
+    climb = 0.0
+    if smooth is not None and smooth > 0.7:
+        if rsi_pct is not None and rsi_pct < 33:
+            climb = 8.0
+            reasons.append("🪜 pullback inside a steady climb")
+        elif pull is not None and 1.5 <= pull <= 3.0:
+            climb = 6.0
+            reasons.append("🪜 dip inside a steady climb")
+        elif rsi_pct is not None and rsi_pct < 50:
+            climb = 3.0
+            reasons.append("🪜 steady climb, easing back")
+        else:
+            climb = 1.0
+            reasons.append("🪜 steady climb (but at its highs)")
+    elif smooth is not None and smooth > 0.4:
+        if rsi_pct is not None and rsi_pct < 40:
+            climb = 3.0
+            reasons.append("↗️ pullback in a rising trend")
+
     # ROOM TO RUN (0-20): distance to the next overhead resistance, in R. The
     # STRONGEST factor measured (15942 setups): >=2R → 56% win / +0.179 R vs
     # <2R → 50% / +0.053, and it rises monotonically (2.5-4R = 59% / +0.218).
@@ -170,7 +218,7 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     if room is None:
         space = 10.0                       # unknown → neutral
     elif room >= 2.5:
-        space = 20.0; reasons.append(f"🚀 clear run ({min(room,9.9):.1f}R to resistance)")
+        space = 18.0; reasons.append(f"🚀 clear run ({min(room,9.9):.1f}R to resistance)")
     elif room >= 2.0:
         space = 16.0; reasons.append(f"room to run ({room:.1f}R)")
     elif room >= 1.5:
@@ -193,7 +241,7 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
         align = 3.0
         reasons.append("✅ sector rising under support")
 
-    total = core + supp + vwap_s + rs + align + space
+    total = core + supp + vwap_s + rs + align + space + wkpts + climb
 
     # -------------- smooth honesty adjustments --------------
     if rsi_now > 60:
@@ -205,8 +253,9 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
 
     parts = {"Trend": (trend, 8), "Dip/RSI": (rsi_s, 30), "Turning up": (turn, 4),
              "Volume": (vol, 2), "Sector": (sec, 3), "Regime": (reg, 3),
-             "Room to run": (space, 20), "Support +": (supp, 20),
-             "VWAP +": (vwap_s, 3), "Rel.str +": (rs, 1), "Sector fit +": (align, 3)}
+             "Room to run": (space, 18), "Support +": (supp, 18),
+             "VWAP +": (vwap_s, 3), "Rel.str +": (rs, 1), "Sector fit +": (align, 3),
+             "Week trend +": (wkpts, 3), "Climb pullback +": (climb, 8)}
 
     return int(round(max(0.0, min(100.0, total)))), reasons, parts
 
@@ -249,7 +298,7 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
         price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy,
         vwap_state=ctx.get("vwap_state"), rel_strength=ctx.get("rel_strength"),
         support_bonus=ctx.get("support_bonus", 0.0), support_tag=ctx.get("support_tag"),
-        upside=ctx.get("upside"))
+        upside=ctx.get("upside"), trend_heat=ctx.get("trend_heat"))
     firing = bool(price > ema_val and rsi_prev <= s.RSI_OVERSOLD and rsi_now > rsi_prev)
 
     # ATR-based stop → 1%-rule position size. Prefer DAILY ATR (realistic for a
@@ -259,7 +308,7 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
         atr_val = ctx.get("atr_daily")
         if not atr_val:
             atr_val = float(s.atr(df, s.ATR_LEN).iloc[-1])
-        stop = price - s.ATR_STOP_MULT * atr_val
+        stop = price - s.active_stop_mult() * atr_val
         stop_pct = (stop - price) / price * 100.0
         risk = s.risk_position(price, s.ticker_currency(ticker), stop_pct)
     except Exception:
@@ -287,6 +336,7 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
         "range_pos": ctx.get("range_pos"), "range_pct": ctx.get("range_pct"),
         "support_note": ctx.get("support_note"),
         "sector": s.sector_info(ticker), "upside": ctx.get("upside"),
+        "trend_heat": ctx.get("trend_heat"),
         "turning_up": rsi_now > rsi_prev,
     }
 
@@ -373,6 +423,26 @@ def _support_line(r) -> str:
             bits.append(f"↗️ Slightly beating the market ({rsx:+.0f}%, 1 month)")
         else:
             bits.append(f"🐌 Lagging the market ({rsx:+.0f}%, 1 month)")
+    # Trend heat — only shown when the shape is CLEAR. If the chart is choppy or
+    # directionless there is nothing useful to say, so we say nothing.
+    th = r.get("trend_heat") or {}
+    sm, mo, wk = th.get("smooth"), th.get("month"), th.get("week")
+    rp = th.get("rsi_pct")
+    if sm is not None and mo is not None and abs(sm) > 0.6:
+        span = (f" · week {wk:+.1f}%" if wk is not None else "") + f" · month {mo:+.1f}%"
+        if sm > 0.6 and mo > 0:
+            step = ""
+            if rp is not None:
+                if rp < 33:
+                    step = " — <b>and it has stepped back</b> (good spot to join)"
+                elif rp > 70:
+                    step = " — but it's at the top of its range right now (wait for a step back)"
+            bits.append(f"🔥 <b>HOT — steady climb</b>{span}{step}")
+        elif sm < -0.6 and mo < 0:
+            bits.append(f"❄️ <b>COLD — steady slide</b>{span}\n"
+                        "   ⚠️ It has been falling for weeks. If it is green today, "
+                        "that is usually a short bounce before it keeps falling — "
+                        "not the start of a recovery.")
     up = r.get("upside") or {}
     if up.get("room_r") is not None:
         rr, lvl = up["room_r"], up.get("level")
@@ -778,6 +848,22 @@ def format_ranking(rows, healthy: bool = True) -> str:
             setup.append(f"vs market {rsx:+.0f}%")
         setup_line = "\n   " + " · ".join(setup)
 
+        # Trend shape — is this dip happening inside a climb, a slide, or chop?
+        th = r.get("trend_heat") or {}
+        wk, mo, sm = th.get("week"), th.get("month"), th.get("smooth")
+        heat_line = ""
+        if mo is not None:
+            if sm is not None and sm >= 0.75 and mo > 0:
+                shape = "🪜 steady climb"
+            elif sm is not None and sm <= -0.75 and mo < 0:
+                shape = "🔻 steady slide"
+            elif mo > 0:
+                shape = "↗️ up but choppy"
+            else:
+                shape = "↘️ down, choppy"
+            heat_line = (f"\n   {shape} · week {wk:+.1f}% · month {mo:+.1f}%"
+                         if wk is not None else f"\n   {shape} · month {mo:+.1f}%")
+
         sec = r.get("sector")
         sec_line = ""
         if sec:
@@ -797,7 +883,7 @@ def format_ranking(rows, healthy: bool = True) -> str:
         lines.append(
             f"<b>{i}. {title}</b> — <b>{r['score']}/100</b> {_band(r['score'])}{star}\n"
             f"   {r['price']:.2f} {r['currency']} · RSI {r['rsi']:.0f}"
-            f"{setup_line}{tag_line}{sec_line}"
+            f"{setup_line}{heat_line}{tag_line}{sec_line}"
         )
         lines.append("")   # blank line between setups for readability
     lines.append("<i>Best mix (what actually tested strong): <b>RSI under 30</b> + "
