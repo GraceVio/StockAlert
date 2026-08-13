@@ -575,6 +575,25 @@ def _support_zone(low: pd.Series, pivots, price: float, tol: float):
             "dist": (price - lvl) / price * 100.0, "pivots": len(nr["ls"])}
 
 
+def tradeable_bars(df: pd.DataFrame):
+    """Drop bars where NOTHING actually traded.
+
+    The 15m frame is downloaded with pre/post-market included, and ~60% of those
+    bars carry Volume=0 — they are quote artifacts, not trades. yfinance still
+    stamps them with a Low/High, which invented phantom support levels ("tested
+    4×" at a price no share changed hands at) and phantom range highs. Support is
+    only meaningful where real volume defended a price."""
+    if df is None or len(df) == 0:
+        return df
+    d = df
+    if isinstance(d.columns, pd.MultiIndex):
+        d = d.copy(); d.columns = d.columns.get_level_values(0)
+    if "Volume" not in d.columns:
+        return d
+    live = d[d["Volume"].fillna(0) > 0]
+    return live if len(live) >= 12 else d      # keep the frame usable if too thin
+
+
 def range_position(df: pd.DataFrame):
     """Where the current price sits inside its recent high-low range, 0-100.
     0 = at the lows (a real pullback), 100 = at the highs (chasing).
@@ -656,10 +675,17 @@ def support_levels(daily: pd.DataFrame, price: float, intraday=None) -> dict:
             if isinstance(idf.columns, pd.MultiIndex):
                 idf = idf.copy(); idf.columns = idf.columns.get_level_values(0)
             idf = idf.dropna(subset=["Low"])
+            idf = tradeable_bars(idf)          # real trades only — no dead bars
             if isinstance(idf.index, pd.DatetimeIndex):
+                # Full trading WEEK (5 sessions) — this matches how the chart is
+                # read by eye ("is it touching a floor 2-3× this week, with
+                # clearly higher prices earlier in the week?"), so the bot's
+                # verdict and the 1-week chart agree. Levels further than 2 ATR
+                # are hidden anyway, so a wider window only improves the touch
+                # count, it doesn't drag in stale levels.
                 sessions = sorted(set(idf.index.date))
-                if len(sessions) > 3:
-                    keep = set(sessions[-3:])
+                if len(sessions) > 5:
+                    keep = set(sessions[-5:])
                     idf = idf[[dd in keep for dd in idf.index.date]]
                     prev = idf[[dd == sessions[-2] for dd in idf.index.date]] \
                         if len(sessions) >= 2 else None
@@ -697,12 +723,23 @@ def support_levels(daily: pd.DataFrame, price: float, intraday=None) -> dict:
 # strongest factor (+0.08R vs -0.18R when not at support). (bonus_at, bonus_near)
 # Scaled up 2026-08-13: at-tested-support was the ONLY factor with a real edge in
 # the 6217-setup test (+0.102 R vs -0.003 R away), so it now carries the largest
-# share of the score. (bonus_at, bonus_near) per horizon; higher TF = stronger.
+# share of the score.
+#
+# Proximity is measured in ATR (volatility) units, NOT a flat % — 1% means far
+# more for a quiet stock than a wild one. Backtest (6214 setups), distance to a
+# tested floor in ATR units:  0.5-0.75 ATR +0.164 R (best) · within 1 ATR +0.112
+# · 1.5-2 ATR +0.056 · 2-3 ATR -0.005 · 3+ ATR -0.128.  So ~1 ATR = "at it",
+# ~2 ATR = the outer edge of any edge, beyond that it is noise and we hide it.
+# High-vol names benefit most (within-1-ATR +0.111 vs flat-3% +0.096).
+# Short-term intraday floors should sit closer, so they use tighter multiples
+# (0.5 ATR ≈ 1.1% on a typical stock — matching the "~1%" intuition).
+# (key, label, bonus_at, bonus_near, atr_at, atr_near)
 _SUPPORT_TIERS = [
-    ("long",   "long-term",   22.0, 11.0),
-    ("medium", "medium-term", 17.0,  8.5),
-    ("short",  "short-term",  12.0,  6.0),
+    ("long",   "long-term",   22.0, 11.0, 1.0, 2.0),
+    ("medium", "medium-term", 17.0,  8.5, 1.0, 2.0),
+    ("short",  "short-term",  12.0,  6.0, 0.5, 1.0),
 ]
+SUPPORT_HIDE_ATR = 2.0     # further than this → not shown at all
 
 
 # Range-position credit, CALIBRATED FROM THE BACKTEST (6217 setups, 5y):
@@ -738,12 +775,48 @@ def support_summary(levels: dict, range_pos=None, range_pct=None) -> dict:
     if range_pct is not None and range_pct < MIN_RANGE_PCT:
         best["note"] = "very tight range — levels are less meaningful here"
 
-    for key, label, pts_at, pts_near in _SUPPORT_TIERS:
+    for key, label, pts_at, pts_near, atr_at, atr_near in _SUPPORT_TIERS:
         lv = (levels or {}).get(key)
         if not lv:
             continue
+        # Distance in ATR units when we know the stock's volatility; fall back to
+        # the old flat-% thresholds only if ATR is unavailable.
+        da = lv.get("dist_atr")
         tested = lv["touches"] >= 2
-        if lv["dist"] <= 3 and tested:
+        # "AT SUPPORT" is reserved for the setup that is actually rare and
+        # valuable: a tested floor AND price pulled back into it. Proximity alone
+        # fired on 59% of the universe — more often than a plain RSI dip (27%),
+        # which is backwards. Requiring the pullback makes it ~22% and it scored
+        # better too (+0.121 R vs +0.102 R). A tested floor underneath while
+        # price sits HIGH in its range is kept, but never framed as a dip-buy.
+        pulled_back = (range_pos is None) or (range_pos <= RANGE_POS_MAX)
+        if da is not None:
+            # Distance relative to this tier's "at" threshold, so the WORDS match
+            # what the chart shows. Saying "at support" when price is 0.85 ATR
+            # above the line (SLB) is simply wrong — and, awkwardly, the BEST
+            # performing zone (+0.164 R) is exactly where price has lifted OFF
+            # the line, so the strong setups were the ones being misnamed.
+            rel = da / atr_at if atr_at else da
+            if rel < 0.25:
+                word, mult = f"sitting on the {label} support line (not bounced yet)", 0.6
+            elif rel <= 0.75:
+                word, mult = f"at {label} support", 1.0
+            elif rel <= 1.5:
+                word, mult = f"just above {label} support", 0.8
+            elif rel <= 2.0:
+                word, mult = f"near {label} support", 0.5
+            else:
+                continue
+            if not tested:
+                if rel <= 0.75:
+                    cand, tag = 1.5, f"at weak {label} low"
+                else:
+                    continue
+            elif pulled_back:
+                cand, tag = pts_at * mult, word
+            else:
+                cand, tag = pts_at * mult * 0.5, f"above a {label} level (not a dip)"
+        elif lv["dist"] <= 3 and tested:
             cand, tag = pts_at, f"at {label} support"
         elif lv["dist"] <= 5 and tested:
             cand, tag = pts_near, f"near {label} support"
@@ -831,11 +904,21 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
         pass
     try:
         sl = support_levels(ddf, price, intraday=intraday)
+        # Express each level's distance in ATR units so "close" scales with the
+        # stock's own volatility (1% is huge for KO, routine for NVDA).
+        _a = ctx.get("atr_daily")
+        if _a and _a > 0:
+            for _lv in sl.values():
+                if _lv:
+                    _lv["dist_atr"] = (price - _lv["level"]) / _a
         ctx["support_levels"] = sl
         # Where price sits in its RECENT range — from the intraday frame (last
         # ~5 sessions) when we have it, else the last 10 daily bars. This is the
         # guard that stops "at support" firing on a stock sitting at its highs.
-        rp, rw = (range_position(intraday) if intraday is not None and len(intraday) > 12
+        # Range must also ignore zero-volume bars — a phantom after-hours high
+        # made price look like it was sitting at the top of its range.
+        rp, rw = (range_position(tradeable_bars(intraday))
+                  if intraday is not None and len(intraday) > 12
                   else range_position(ddf.tail(10)))
         ctx["range_pos"], ctx["range_pct"] = rp, rw
         summ = support_summary(sl, range_pos=rp, range_pct=rw)
@@ -1083,7 +1166,11 @@ def refresh_caches():
 
 
 def get_sector_strength():
-    """Return {sector: {'month': %, 'strong': bool}} once per run."""
+    """Return {sector: {'day': %, 'week': %, 'month': %, 'strong': bool}} once per run.
+
+    'day' is TODAY's move (sector rotation changes daily — it's what tells you
+    where money is flowing right now); 'month'/'strong' are the slower trend used
+    for scoring, because that is the definition that was backtested."""
     if _sector_cache["data"] is not None:
         return _sector_cache["data"]
     out = {}
@@ -1097,14 +1184,40 @@ def get_sector_strength():
                 df.columns = df.columns.get_level_values(0)
             close = df["Close"]
             last = float(close.iloc[-1])
+            prev = float(close.iloc[-2])
+            week_ago = float(close.iloc[-6])
             month_ago = float(close.iloc[-21])
             sma50 = float(close.rolling(50).mean().iloc[-1])
-            out[name] = {"month": (last - month_ago) / month_ago * 100,
+            out[name] = {"day": (last - prev) / prev * 100,
+                         "week": (last - week_ago) / week_ago * 100,
+                         "month": (last - month_ago) / month_ago * 100,
                          "strong": last > sma50}
         except Exception:
             continue
     _sector_cache["data"] = out
     return out
+
+
+def sector_day_ranking():
+    """Sectors ordered by TODAY's move, best first: [(name, day_%), …].
+    This is the daily heat-map — where money is rotating right now."""
+    data = get_sector_strength()
+    return sorted(((n, d.get("day", 0.0)) for n, d in data.items()),
+                  key=lambda x: x[1], reverse=True)
+
+
+def sector_info(ticker: str):
+    """{name, day, week, month, strong, day_rank, of} for a ticker's sector.
+    day_rank = 1 means the hottest sector today. None if unknown."""
+    sec = SECTOR_MAP.get(ticker)
+    if not sec:
+        return None
+    d = get_sector_strength().get(sec)
+    if not d:
+        return None
+    order = [n for n, _ in sector_day_ranking()]
+    rank = order.index(sec) + 1 if sec in order else None
+    return {"name": sec, "day_rank": rank, "of": len(order), **d}
 
 
 def sector_is_strong(ticker: str):
