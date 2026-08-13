@@ -979,19 +979,42 @@ def get_headlines(ticker: str, limit: int = 2):
 # EARNINGS GUARD  (gap risk around reports)
 # ----------------------------------------------------------------------------
 
-def days_to_earnings(ticker: str):
-    """Days until the next earnings date, or None if unknown."""
+def next_earnings_ts(ticker: str):
+    """Next earnings date/time as a tz-aware Europe/Berlin Timestamp, or None.
+
+    yfinance stores the timestamp in US/Eastern. We convert it to Berlin so the
+    date AND time are shown in the user's own timezone. NOTE: the TIME is reliable
+    for US names but only approximate for EU/UK names (yfinance uses a placeholder
+    Eastern time for them); the DATE is dependable either way."""
     try:
         cal = yf.Ticker(ticker).get_earnings_dates(limit=8)
         if cal is None or cal.empty:
             return None
-        now = pd.Timestamp.now(tz=cal.index.tz)
-        future = cal.index[cal.index > now]
+        idx = cal.index
+        now = pd.Timestamp.now(tz=idx.tz)
+        future = idx[idx > now]
         if len(future) == 0:
             return None
-        return int((future.min() - now).days)
+        ts = future.min()
+        try:
+            return ts.tz_convert("Europe/Berlin")
+        except Exception:
+            return ts
     except Exception:
         return None
+
+
+def days_to_earnings(ticker: str):
+    """Calendar days until the next earnings, in Europe/Berlin, or None.
+
+    Uses the CALENDAR-DATE difference in Berlin (not a raw hour-count): a report
+    tomorrow morning is 'in 1 day' even when it's under 24h away, so 'today'
+    never leaks onto an event that is actually the next Berlin date."""
+    ts = next_earnings_ts(ticker)
+    if ts is None:
+        return None
+    today = dt.datetime.now(ZoneInfo("Europe/Berlin")).date()
+    return (ts.date() - today).days
 
 
 # ----------------------------------------------------------------------------

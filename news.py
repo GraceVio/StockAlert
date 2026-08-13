@@ -152,7 +152,7 @@ def market_news_text():
 
 
 def stock_lean(ticker):
-    """Compact lean for embedding elsewhere (e.g. /score). Returns (emoji, word)
+    """Compact lean for embedding elsewhere (e.g. /rank). Returns (emoji, word)
     or (None, None) if no news."""
     raw = _raw_news(ticker, limit=5)
     if not raw:
@@ -161,3 +161,32 @@ def stock_lean(ticker):
     lean, p, n = _lean_from(leans)
     word = {"pos": "positive", "neg": "negative", "neu": "mixed"}[lean]
     return _emoji(lean), word
+
+
+def stock_news_brief(ticker, n=2):
+    """A short news block for /score: overall lean + the 1-2 most meaningful
+    headlines (positive OR negative — neutral ones are skipped so the reader
+    sees what could actually MOVE the stock). Empty string if no news.
+
+    HTML-formatted, ready to drop into score_one. Both directions matter here:
+    a 🔴 headline is a reason to hold off (falling-knife risk), a 🟢 one confirms
+    the uptrend thesis — but note a fresh big-positive story often means the pop
+    already happened, so it's context, not a green light to chase."""
+    raw = _raw_news(ticker, limit=6)
+    if not raw:
+        return ""
+    classed = [(classify(t)[0], classify(t)[1], t, pub) for t, pub in raw]
+    lean, p, nneg = _lean_from([(l, r) for l, r, _, _ in classed])
+    head = {"pos": "🟢 leaning positive", "neg": "🔴 leaning negative",
+            "neu": "⚪ mixed / neutral"}[lean]
+    # Show the headlines that carry a signal first (pos/neg before neutral).
+    ranked = sorted(classed, key=lambda c: 0 if c[0] in ("pos", "neg") else 1)
+    picks = ranked[:n]
+    lines = [f"\n📰 <b>News: {head}</b>  <i>({p} pos · {nneg} neg)</i>"]
+    for l, r, t, pub in picks:
+        tag = _emoji(l) + ("⚠️" if r else "")
+        src = f" <i>— {pub}</i>" if pub else ""
+        lines.append(f"   {tag} {t[:120]}{src}")
+    lines.append("   <i>Rough headline read — direction ≠ next price move. "
+                 "/news " + ticker.upper() + " for more.</i>")
+    return "\n".join(lines)

@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 import requests
 import pandas as pd
 import scanner as s
+import ff_calendar as ff
 
 MACRO_FILE      = "macro_calendar.json"
 EARN_LOOKAHEAD  = 7    # list earnings within this many days
@@ -95,6 +96,15 @@ def macro_meta(name: str):
         if any(k in low for k in keys):
             return impact, emoji, meaning
     return "Medium", "🟠", "Market-moving US release — expect some volatility."
+
+
+def _macro_keys(name: str):
+    """Keyword list for matching this event against Forex Factory's titles."""
+    low = (name or "").lower()
+    for keys, _, _, _ in _MACRO_META:
+        if any(k in low for k in keys):
+            return keys
+    return (low,)
 
 
 def _today():
@@ -215,14 +225,27 @@ def macro_text():
                 "<i>Curated list — verify dates against official schedules.</i>")
     lines = ["🏦 <b>Macro events — next 7 days</b>",
              "🔴 high impact · 🟠 medium · 🟡 lower", ""]
+    ff_used = False
     for e in ev:
         when = "TODAY" if e["days"] == 0 else ("tomorrow" if e["days"] == 1
                                                else f"in {e['days']} days")
         impact, emoji, meaning = macro_meta(e["name"])
         warn = " ⚠️" if e["days"] <= 1 and impact == "High" else ""
+        # forecast / previous from the free Forex Factory feed (no key)
+        exp = ""
+        try:
+            info = ff.us_expected(_macro_keys(e["name"]), e["date"])
+            if info and (info.get("forecast") or info.get("previous")):
+                fc = info.get("forecast") or "?"
+                pv = info.get("previous") or "?"
+                exp = f"   📈 expected <b>{fc}</b> · prev {pv}\n"
+                ff_used = True
+        except Exception:
+            pass
         lines.append(
             f"{emoji} <b>{e['name']}</b>{warn}\n"
             f"   🗓️ {when} · {e['date']} · {e.get('cet','')} CET\n"
+            f"{exp}"
             f"   💬 {meaning}\n"
         )
     if _SOURCE["kind"] == "live":
@@ -230,6 +253,8 @@ def macro_text():
     else:
         src = ("📝 Dates: curated best-effort — add a free FRED_API_KEY secret for "
                "live official dates. Verify around 🔴 events.")
+    if ff_used:
+        src += "  📈 Expected/previous: Forex Factory (free)."
     lines.append(f"<i>{src}\nThe reaction depends on the number vs what was "
                  "expected. Around 🔴 events: avoid brand-new entries, wait until "
                  "it settles.</i>")
@@ -247,6 +272,20 @@ def upcoming_earnings(days=EARN_LOOKAHEAD):
             out.append({"ticker": t, "days": dte, "name": s.name_for(t)})
     out.sort(key=lambda x: x["days"])
     return out
+
+
+def _earn_when(ticker, dte):
+    """'TODAY · Thu 13 Aug, ~14:00 CET' — day label + Berlin date/time. The '~'
+    flags that the time is approximate for EU/UK names (see next_earnings_ts)."""
+    day = "TODAY" if dte == 0 else ("tomorrow" if dte == 1 else f"in {dte} days")
+    ts = s.next_earnings_ts(ticker)
+    if ts is None:
+        return day
+    datestr = ts.strftime("%a %d %b")
+    hm = ts.strftime("%H:%M")
+    if hm == "00:00":                       # date-only placeholder → no time
+        return f"{day} · {datestr}"
+    return f"{day} · {datestr}, ~{hm} CET"
 
 
 def earnings_impact(dte):
@@ -332,7 +371,7 @@ def earnings_warning(ticker: str) -> str:
     if dte is None or dte > EARN_LOOKAHEAD:
         return ""
     emoji, label = earnings_impact(dte)
-    when = "TODAY" if dte == 0 else ("tomorrow" if dte == 1 else f"in {dte} days")
+    when = _earn_when(ticker, dte)
     line = f"\n{emoji} <b>Earnings {when}</b> — {label} (gap risk)"
     im = implied_move(ticker)
     if im:
@@ -354,15 +393,15 @@ def earnings_text():
              "🔴 ≤2 days · 🟠 3-4 · 🟡 5-7  (gap risk — avoid new entries just before)",
              ""]
     for e in ev:
-        when = "TODAY" if e["days"] == 0 else ("tomorrow" if e["days"] == 1
-                                               else f"in {e['days']} days")
+        when = _earn_when(e["ticker"], e["days"])
         emoji, _ = earnings_impact(e["days"])
         nm = f" · {e['name']}" if e["name"] else ""
         im = implied_move(e["ticker"])
         mv = f" · options expect ±{im['pct']:.0f}%" if im else ""
         lines.append(f"{emoji} <b>{e['ticker']}</b>{nm} — {when}{mv}")
     lines.append("\n<i>±% = the swing the options market prices in for the report "
-                 "(a risk gauge, not a direction).</i>")
+                 "(a risk gauge, not a direction). Times are in CET — exact for US "
+                 "names, approximate for EU/UK.</i>")
     return "\n".join(lines)
 
 

@@ -346,8 +346,7 @@ def score_one(ticker: str, healthy=None) -> str:
     except Exception:
         earn = ""
     try:
-        nemoji, nword = nw.stock_lean(ticker)
-        news_line = f"\n📰 News lean: {nemoji} <b>{nword}</b>  <i>(rough headline read)</i>" if nemoji else ""
+        news_line = nw.stock_news_brief(ticker)
     except Exception:
         news_line = ""
 
@@ -365,20 +364,27 @@ def score_one(ticker: str, healthy=None) -> str:
     except Exception:
         eline = ""
 
-    return (
-        f"{_volatility_banner()}"
-        f"🔎 <b>{title}</b> — <b>{r['score']}/100</b> {_band(r['score'])}{star}\n"
-        f"{fresh}\n\n"
-        f"Price <b>{r['price']:.2f} {cur}</b> · RSI {r['rsi']:.0f} · "
-        f"{'uptrend' if r['uptrend'] else 'below trend'} · vol {r['vol_ratio']:.1f}×"
-        f"{_support_line(r)}"
-        f"{_size_line(r)}"
-        f"{earn}{news_line}{eline}\n\n"
-        f"<b>Score breakdown</b>\n<pre>{breakdown}</pre>\n"
-        f"{(' · '.join(r['reasons']))}\n\n"
-        f"<i>0-100 = how well this fits the dip-in-uptrend edge right now (not a "
-        f"price prediction). Higher = better entry quality.</i>"
-    )
+    # Assemble as clearly separated blocks (blank line between each) so /score
+    # reads as neatly as /rank instead of one dense wall of text.
+    head = [f"{_volatility_banner()}🔎 <b>{title}</b> — "
+            f"<b>{r['score']}/100</b> {_band(r['score'])}{star}"]
+    if fresh:
+        head.append(fresh)
+    snapshot = (f"Price <b>{r['price']:.2f} {cur}</b> · RSI {r['rsi']:.0f} · "
+                f"{'uptrend' if r['uptrend'] else 'below trend'} · "
+                f"vol {r['vol_ratio']:.1f}×")
+    breakdown_block = (f"<b>Score breakdown</b>\n<pre>{breakdown}</pre>\n"
+                       f"{(' · '.join(r['reasons']))}")
+    footer = ("<i>0-100 = how well this fits the dip-in-uptrend edge right now (not a "
+              "price prediction). Higher = better entry quality.</i>")
+
+    sections = ["\n".join(head), snapshot]
+    for blk in (_support_line(r), _size_line(r), earn, news_line, eline):
+        blk = blk.strip("\n") if blk else ""
+        if blk:
+            sections.append(blk)
+    sections += [breakdown_block, footer]
+    return "\n\n".join(sections)
 
 
 def rank(top_n: int = TOP_N, healthy=None):
@@ -555,7 +561,8 @@ def format_ranking(rows, healthy: bool = True) -> str:
         nm = s.name_for(r["ticker"])
         title = f"{r['ticker']}" + (f" · {nm}" if nm else "")
         # Only the tags that carry real signal (backtest): at-support, VWAP
-        # bounce, the two VWAP warnings, and NEGATIVE news. Nothing filler.
+        # bounce, the two VWAP warnings, and the news lean (🔴 negative = hold-off
+        # risk, 🟢 positive = thesis support — but a fresh pop may already be in).
         tags = []
         stag = r.get("support_tag") or ""
         if stag and "weak" not in stag and (stag.startswith("at ") or stag.startswith("near")):
@@ -569,6 +576,8 @@ def format_ranking(rows, healthy: bool = True) -> str:
             tags.append("⚠️ VWAP chop")
         if r.get("news_emoji") == "🔴":
             tags.append("📰 negative news")
+        elif r.get("news_emoji") == "🟢":
+            tags.append("📰 positive news")
         tag_line = ("\n   " + " · ".join(tags)) if tags else ""
         rp = r.get("risk")
         size_line = ""
@@ -582,7 +591,8 @@ def format_ranking(rows, healthy: bool = True) -> str:
         )
         lines.append("")   # blank line between setups for readability
     lines.append("<i>🎯 bounce &amp; 🧱 support = higher quality · ⚠️ = avoid · "
-                 "★ = live trigger. 💰 risks ~1% per trade.</i>")
+                 "📰 = news lean (context, not scored) · ★ = live trigger. "
+                 "💰 risks ~1% per trade.</i>")
     return "\n".join(lines)
 
 
