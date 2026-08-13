@@ -13,9 +13,19 @@ on:
     # trigger is skipped. concurrency (below) keeps only ONE poller alive.
     #
     # Times are UTC (GitHub cron has no timezone). 06:00 CET = 04:00 UTC in
-    # summer / 05:00 UTC in winter, so we fire both to cover the morning wake-up.
-    - cron: "0 4,5 * * 1-5"     # morning wake-up (~06:00 CET), Mon-Fri
-    - cron: "0 10,16 * * 1-5"   # daytime backup seeds (~12:00 / 18:00 CET)
+    # summer / 05:00 UTC in winter, so we cover BOTH to wake up ~06:00 CET.
+    #
+    # IMPORTANT: never schedule at minute :00 — that's the most-contended slot on
+    # GitHub Actions and gets silently DROPPED/delayed most often. We use off-peak
+    # minutes AND fire several staggered morning attempts, so even if GitHub skips
+    # some, one lands and starts the poller. `concurrency` (below) cancels the
+    # duplicates down to a single live poller, so extra firings cost nothing.
+    - cron: "8 4 * * 1-5"       # ~06:08 CET (summer) — primary morning wake-up
+    - cron: "23 4 * * 1-5"      # ~06:23 CET backup
+    - cron: "8 5 * * 1-5"       # ~06:08 CET (winter) / 07:08 (summer)
+    - cron: "23 5 * * 1-5"      # another morning backup
+    - cron: "8 6 * * 1-5"       # ~07:08/08:08 CET — final morning safety net
+    - cron: "8 10,16 * * 1-5"   # daytime backup seeds (~12:00 / 18:00 CET)
   workflow_dispatch:
 
 # contents: write -> /add and /remove can save watchlist.txt back to the repo.

@@ -4,7 +4,11 @@ name: Event Digest
 # weekday morning, and can be run manually any time.
 on:
   schedule:
-    - cron: "0 6 * * 1-5"      # 08:00 CET, Mon-Fri
+    # Off-peak minute (NOT :00 — GitHub drops/delays top-of-hour runs the most,
+    # which is why the digest was arriving ~11:00 instead of ~08:00). Single
+    # cron only: this job SENDS messages, so firing it twice would double-send
+    # the digest. 06:12 UTC ≈ 08:12 CET summer / 07:12 CET winter, Mon-Fri.
+    - cron: "12 6 * * 1-5"
   workflow_dispatch:
 
 jobs:
