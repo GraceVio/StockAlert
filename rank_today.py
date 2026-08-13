@@ -243,9 +243,9 @@ def _support_line(r) -> str:
             bits.append(f"🧱 <b>Support: {tag}</b>")
         else:
             bits.append("🧱 <b>Support:</b> not at a tested floor right now")
-        bits.append(f"   • Short-term (≈2mo, daily):  {_fmt_sup(sh, cur)}")
-        bits.append(f"   • Medium-term (≈9mo, daily): {_fmt_sup(md, cur)}")
-        bits.append(f"   • Long-term (≈2yr, weekly):  {_fmt_sup(lg, cur)}")
+        bits.append(f"   • Short-term (live, intraday): {_fmt_sup(sh, cur)}")
+        bits.append(f"   • Medium-term (≈6mo, daily):  {_fmt_sup(md, cur)}")
+        bits.append(f"   • Long-term (≈1yr, weekly):   {_fmt_sup(lg, cur)}")
     st = r.get("vwap_state")
     vd = r.get("vwap_dist")
     dtxt = f" ({vd:+.1f}%)" if vd is not None else ""
@@ -296,6 +296,40 @@ def _size_line(r) -> str:
     return out
 
 
+def _analyst_line(ticker: str, price: float, cur: str) -> str:
+    """Wall-St. consensus rating + median price target from Finnhub (US/NA + a
+    free key). Shown as longer-horizon CONTEXT, never folded into the score.
+    Empty if no key / non-US / unavailable."""
+    try:
+        import finnhub_data as fh
+    except Exception:
+        return ""
+    if not fh.has_key():
+        return ""
+    bits = []
+    try:
+        rec = fh.recommendation(ticker)
+        if rec:
+            bits.append(f"consensus <b>{rec['label']}</b> "
+                        f"({rec['buy']} buy · {rec['hold']} hold · {rec['sell']} sell)")
+    except Exception:
+        pass
+    try:
+        pt = fh.price_target(ticker)
+        med = pt.get("median") if pt else None
+        if med:
+            up = (med / price - 1) * 100 if price else None
+            uptxt = f" ({up:+.0f}% vs now)" if up is not None else ""
+            bits.append(f"median target <b>{med:.2f} {cur}</b>{uptxt}")
+    except Exception:
+        pass
+    if not bits:
+        return ""
+    return ("\n🎯 <b>Analysts:</b> " + " · ".join(bits) +
+            "\n   <i>Wall-St. consensus — a longer-horizon sanity check, not a "
+            "day-trade trigger; the beat/miss reaction is unpredictable.</i>")
+
+
 def score_one(ticker: str, healthy=None) -> str:
     """Detailed 0-100 breakdown for a single ticker (any symbol you type)."""
     ticker = ticker.strip().upper()
@@ -322,7 +356,7 @@ def score_one(ticker: str, healthy=None) -> str:
             # support tiers (short 2mo, medium 9mo, long weekly-2y).
             dd = yf.download(ticker, period="2y", interval="1d",
                              progress=False, auto_adjust=False)
-            ctx = s.daily_context(ticker, dd, r0["price"])
+            ctx = s.daily_context(ticker, dd, r0["price"], intraday=df)
         except Exception:
             ctx = None
     r = _score_from_df(ticker, df, healthy, ctx=ctx, rt_price=rtp) if ctx else r0
@@ -375,15 +409,14 @@ def score_one(ticker: str, healthy=None) -> str:
                 f"vol {r['vol_ratio']:.1f}×")
     breakdown_block = (f"<b>Score breakdown</b>\n<pre>{breakdown}</pre>\n"
                        f"{(' · '.join(r['reasons']))}")
-    footer = ("<i>0-100 = how well this fits the dip-in-uptrend edge right now (not a "
-              "price prediction). Higher = better entry quality.</i>")
 
+    analyst = _analyst_line(ticker, r["price"], cur)
     sections = ["\n".join(head), snapshot]
-    for blk in (_support_line(r), _size_line(r), earn, news_line, eline):
+    for blk in (_support_line(r), _size_line(r), earn, news_line, analyst, eline):
         blk = blk.strip("\n") if blk else ""
         if blk:
             sections.append(blk)
-    sections += [breakdown_block, footer]
+    sections += [breakdown_block]
     return "\n\n".join(sections)
 
 
@@ -428,7 +461,7 @@ def rank(top_n: int = TOP_N, healthy=None):
         ctx = None
         if price is not None and ddata is not None:
             try:
-                ctx = s.daily_context(t, ddata[t], price)
+                ctx = s.daily_context(t, ddata[t], price, intraday=df)
             except Exception:
                 ctx = None
         r = _score_from_df(t, df, healthy, ctx=ctx, rt_price=rtp) if ctx else r0

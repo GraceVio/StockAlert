@@ -540,12 +540,14 @@ def _strongest_support(levels, price, tol=0.04):
             "dist": (price - best["lvl"]) / price * 100.0}
 
 
-def support_levels(daily: pd.DataFrame, price: float) -> dict:
-    """Nearest tested support floor below the price on THREE horizons. All are
-    measured within ~2 years so /rank and /score always agree:
-      short  — daily pivots, last ~2 months  (immediate, days-to-weeks)
-      medium — daily pivots, last ~9 months   (swing structure — the main one)
-      long   — weekly pivots, last ~2 years    (major, stronger floor)
+def support_levels(daily: pd.DataFrame, price: float, intraday=None) -> dict:
+    """Nearest tested support floor below the price on THREE horizons. Ranges
+    tightened 2026-08-13 (per Grace) so a floor is only shown while it's still
+    RELEVANT to how the stock trades now — an old 2-year low isn't:
+      short  — LIVE INTRADAY: is the price right NOW at/near a recent intraday
+               floor (from the 15-min frame, ~last 5 days) — not daily candles
+      medium — daily pivots, last ~6 months   (swing structure — the main one)
+      long   — weekly pivots, last ~1 year      (major, stronger floor)
     Each is {level, touches, dist} or None. Higher timeframe = stronger."""
     out = {"short": None, "medium": None, "long": None}
     if daily is None or len(daily) < 40:
@@ -557,15 +559,29 @@ def support_levels(daily: pd.DataFrame, price: float) -> dict:
     if d.empty:
         return out
     try:
-        out["short"] = _nearest_support(_pivot_lows(d["Low"].tail(42), 3), price)
+        # SHORT-TERM = live intraday: is the CURRENT price sitting on a recent
+        # intraday support (per Grace 2026-08-13). Uses the 15m frame; a ±4-bar
+        # (~1h) pivot finds intraday swing lows. Tighter tol (2%) — intraday
+        # floors sit close to price. Falls back to recent daily lows if no
+        # intraday frame is available.
+        if intraday is not None and len(intraday) > 12:
+            idf = intraday
+            if isinstance(idf.columns, pd.MultiIndex):
+                idf = idf.copy(); idf.columns = idf.columns.get_level_values(0)
+            idf = idf.dropna(subset=["Low"])
+            out["short"] = _nearest_support(_pivot_lows(idf["Low"], 4), price, tol=0.02)
+        else:
+            out["short"] = _nearest_support(_pivot_lows(d["Low"].tail(22), 2), price)
     except Exception:
         pass
     try:
-        out["medium"] = _nearest_support(_pivot_lows(d["Low"].tail(189), 5), price)
+        # ~6 months of daily bars.
+        out["medium"] = _nearest_support(_pivot_lows(d["Low"].tail(126), 4), price)
     except Exception:
         pass
     try:
-        wk = _resample_low_close(d.tail(504), "W")
+        # ~1 year, resampled to weekly (smooths noise for the major floor).
+        wk = _resample_low_close(d.tail(252), "W")
         out["long"] = _nearest_support(_pivot_lows(wk["Low"], 3), price)
     except Exception:
         pass
@@ -643,8 +659,9 @@ def relative_strength(df: pd.DataFrame, lookback: int = 21):
     return None if spy is None else sret - spy
 
 
-def daily_context(ticker: str, ddf: pd.DataFrame, price: float) -> dict:
-    """Bundle VWAP / support / relative-strength for a ticker from its daily frame."""
+def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -> dict:
+    """Bundle VWAP / support / relative-strength for a ticker from its daily frame.
+    `intraday` (the 15m frame) is used for the LIVE short-term support horizon."""
     ctx = {"vwap": None, "above_vwap": None, "vwap_state": None, "vwap_dist": None,
            "vwap_note": None, "support_levels": None,
            "support_bonus": 0.0, "support_tag": None, "support_tier": None,
@@ -675,7 +692,7 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float) -> dict:
     except Exception:
         pass
     try:
-        sl = support_levels(ddf, price)
+        sl = support_levels(ddf, price, intraday=intraday)
         ctx["support_levels"] = sl
         summ = support_summary(sl)
         ctx["support_bonus"] = summ["bonus"]

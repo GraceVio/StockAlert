@@ -429,6 +429,7 @@ def _do_diag():
         f"FRED_API_KEY: {yn('FRED_API_KEY')}\n"
         f"ALPACA_KEY_ID: {yn('ALPACA_KEY_ID')}\n"
         f"ALPACA_SECRET_KEY: {yn('ALPACA_SECRET_KEY')}\n"
+        f"FINNHUB_API_KEY: {yn('FINNHUB_API_KEY')}  → company news (US)\n"
         f"ACCOUNT_EUR: {yn('ACCOUNT_EUR')}  → using €{s.load_account():.0f}\n"
         f"TRADE_MODE: {yn('TRADE_MODE')}  → {s.load_mode()} mode\n\n"
         "<i>❌ means the secret name doesn't match, isn't mapped into the workflow "
