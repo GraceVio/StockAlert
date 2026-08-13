@@ -132,7 +132,18 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     else:
         rs = 0.0; reasons.append("lagging market")
 
-    total = core + supp + vwap_s + rs
+    # Sector ALIGNMENT bonus (0-3). Sector trend on its own is worthless
+    # (uptrend +0.059 R vs downtrend +0.078 — no edge, tested on 3937 setups), so
+    # it stays at 3 points standalone. But a rising sector UNDER a stock that is
+    # at tested support is the best combination measured in this project:
+    # at-support + sector-up = +0.151 R / 55% win, vs +0.106 R when the sector is
+    # falling. That synergy is worth its own small bonus.
+    align = 0.0
+    if sec_strong is True and support_tag and support_tag.startswith("at "):
+        align = 3.0
+        reasons.append("✅ sector rising under support")
+
+    total = core + supp + vwap_s + rs + align
 
     # -------------- smooth honesty adjustments --------------
     if rsi_now > 60:
@@ -144,7 +155,8 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
 
     parts = {"Trend": (trend, 20), "Dip/RSI": (rsi_s, 27), "Turning up": (turn, 12),
              "Volume": (vol, 7), "Sector": (sec, 3), "Regime": (reg, 3),
-             "Support +": (supp, 22), "VWAP +": (vwap_s, 4), "Rel.str +": (rs, 2)}
+             "Support +": (supp, 22), "VWAP +": (vwap_s, 4), "Rel.str +": (rs, 2),
+             "Sector fit +": (align, 3)}
 
     return int(round(max(0.0, min(100.0, total)))), reasons, parts
 
@@ -222,17 +234,24 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
         "support_dist": ctx.get("support_dist"), "support_touches": ctx.get("support_touches"),
         "rel_strength": ctx.get("rel_strength"),
         "range_pos": ctx.get("range_pos"), "range_pct": ctx.get("range_pct"),
-        "support_blocked": ctx.get("support_blocked"),
+        "support_note": ctx.get("support_note"),
+        "sector": s.sector_info(ticker),
+        "turning_up": rsi_now > rsi_prev,
     }
 
 
 def _fmt_sup(lvl_dict, cur):
-    """Format one support level: '342.35 USD · 3.4% below · tested 5×'."""
+    """One support level: '342.35 USD · 3.4% below (0.7×ATR) · tested 5×'.
+    The ATR figure is what actually matters — it says how close that is FOR THIS
+    stock, so a 1% gap on a quiet name isn't confused with 1% on a wild one."""
     if not lvl_dict:
         return "none nearby"
     t = lvl_dict["touches"]
     strength = f"tested {t}×" if t > 1 else "1 touch (weak)"
-    return f"{lvl_dict['level']:.2f} {cur} · {lvl_dict['dist']:.1f}% below · {strength}"
+    da = lvl_dict.get("dist_atr")
+    atr_txt = f" ({da:.1f}×ATR)" if da is not None else ""
+    return (f"{lvl_dict['level']:.2f} {cur} · {lvl_dict['dist']:.1f}% below"
+            f"{atr_txt} · {strength}")
 
 
 def _support_line(r) -> str:
@@ -244,7 +263,12 @@ def _support_line(r) -> str:
     # the backtest edge fades (within 3%: +0.102 R · within 8%: +0.066), and a
     # floor 10% away tells you nothing about today — so it's hidden entirely.
     def _near(lv):
-        return lv if (lv and lv.get("dist") is not None and lv["dist"] <= 5.0) else None
+        if not lv:
+            return None
+        da = lv.get("dist_atr")
+        if da is not None:
+            return lv if da <= s.SUPPORT_HIDE_ATR else None
+        return lv if (lv.get("dist") is not None and lv["dist"] <= 5.0) else None
     sh, md, lg = _near(sl.get("short")), _near(sl.get("medium")), _near(sl.get("long"))
     if sh or md or lg:
         # headline: which timeframe's tested floor the price is AT (if any)
@@ -298,6 +322,12 @@ def _support_line(r) -> str:
             bits.append(f"↗️ Slightly beating the market ({rsx:+.0f}%, 1 month)")
         else:
             bits.append(f"🐌 Lagging the market ({rsx:+.0f}%, 1 month)")
+    sec = r.get("sector")
+    if sec:
+        arrow = "🟢" if sec["strong"] and sec["month"] > 0 else "🔴"
+        bits.append(f"{arrow} <b>{sec['name']} sector</b>: {sec['day']:+.1f}% today · "
+                    f"{sec['week']:+.1f}% week · {sec['month']:+.1f}% month"
+                    f"{' · above its 50-day trend' if sec['strong'] else ' · below its 50-day trend'}")
     return ("\n" + "\n".join(bits)) if bits else ""
 
 
@@ -622,8 +652,25 @@ def format_ranking(rows, healthy: bool = True) -> str:
         # risk, 🟢 positive = thesis support — but a fresh pop may already be in).
         tags = []
         stag = r.get("support_tag") or ""
-        if stag and "weak" not in stag and (stag.startswith("at ") or stag.startswith("near")):
-            tags.append(f"🧱 {r.get('support_tier','')} support")
+        sdist = r.get("support_dist")
+        tier = r.get("support_tier", "")
+        if stag and "weak" not in stag:
+            # Say AT vs NEAR honestly and give the distance — collapsing both to
+            # "support" made a floor 4% underneath look like price sitting on it.
+            d = f" ({sdist:.1f}% below)" if sdist is not None else ""
+            if stag.startswith("at "):
+                tags.append(f"🧱 <b>at {tier} support</b>")
+            elif stag.startswith("just above"):
+                tags.append(f"🧱 just above {tier} support{d}")
+            elif stag.startswith("sitting on"):
+                tags.append(f"🧱 on {tier} line (not bounced yet)")
+            elif stag.startswith("above a"):
+                tags.append(f"▫️ above a {tier} level (not a dip)")
+            elif stag.startswith("near"):
+                tags.append(f"🧱 near {tier} support{d}")
+        rpos = r.get("range_pos")
+        if rpos is not None and rpos > 55:
+            tags.append(f"📍 {rpos:.0f}% of range (near highs)")
         st = r.get("vwap_state")
         if st == "bounce":
             tags.append("🎯 VWAP bounce")
@@ -636,20 +683,49 @@ def format_ranking(rows, healthy: bool = True) -> str:
         elif r.get("news_emoji") == "🟢":
             tags.append("📰 positive news")
         tag_line = ("\n   " + " · ".join(tags)) if tags else ""
-        rp = r.get("risk")
-        size_line = ""
-        if rp:
-            size_line = (f"\n   💰 ≈€{rp['pos_val']:.0f} · risk €{rp['risk_eur']:.0f} "
-                         f"(stop {r['stop_pct']:+.1f}%)")
+
+        # The other scoring factors, short but complete, so the ranking itself
+        # says WHY a name is here (no need to open /score to decide).
+        setup = ["📈 uptrend" if r["uptrend"] else "📉 below trend"]
+        if r["rsi"] <= 45:
+            setup.append("dip zone")
+        elif r["rsi"] > 60:
+            setup.append("extended")
+        if r.get("turning_up"):
+            setup.append("turning up ↗")
+        vr = r.get("vol_ratio")
+        if vr:
+            setup.append(f"vol {vr:.1f}×")
+        rsx = r.get("rel_strength")
+        if rsx is not None:
+            setup.append(f"vs market {rsx:+.0f}%")
+        setup_line = "\n   " + " · ".join(setup)
+
+        sec = r.get("sector")
+        sec_line = ""
+        if sec:
+            rk, of = sec.get("day_rank"), sec.get("of") or 11
+            # 🔥 = top-3 sector TODAY (where money is rotating right now — what
+            # matters for a fast trade); 🧊 = bottom-3.
+            if rk and rk <= 3:
+                heat = f"🔥 #{rk} hottest today"
+            elif rk and rk > of - 3:
+                heat = f"🧊 #{rk}/{of} coldest today"
+            else:
+                heat = f"#{rk}/{of} today" if rk else ""
+            trend = "🟢 trend up" if (sec["strong"] and sec["month"] > 0) else "🔴 trend weak"
+            sec_line = (f"\n   {sec['name']} <b>{sec['day']:+.1f}%</b> today "
+                        f"({heat}) · {sec['month']:+.1f}% 1mo {trend}")
+
         lines.append(
             f"<b>{i}. {title}</b> — <b>{r['score']}/100</b> {_band(r['score'])}{star}\n"
             f"   {r['price']:.2f} {r['currency']} · RSI {r['rsi']:.0f}"
-            f"{tag_line}{size_line}"
+            f"{setup_line}{tag_line}{sec_line}"
         )
         lines.append("")   # blank line between setups for readability
-    lines.append("<i>🎯 bounce &amp; 🧱 support = higher quality · ⚠️ = avoid · "
-                 "📰 = news lean (context, not scored) · ★ = live trigger. "
-                 "💰 risks ~1% per trade.</i>")
+    lines.append("<i>🧱 at support + 📈 uptrend + dip + 🟢 sector = the strongest mix · "
+                 "⚠️ = avoid · 📍 over 55% of range = chasing · ★ = live trigger.\n"
+                 "Position size, stop &amp; target: /score SYM</i>")
     return "\n".join(lines)
 
 
