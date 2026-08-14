@@ -159,7 +159,7 @@ def colour(v):
         "color:#dc2626;font-weight:600" if v < 0 else "")
 
 
-def show_table(df, numeric, index_col="Ticker", height=560, extra=None,
+def show_table(df, numeric, index_col="Ticker", height=None, extra=None,
                fmt=None, select_key=None):
     """One table style for the whole app.
 
@@ -330,13 +330,12 @@ if _map == "🌡️ Sectors":
     } for r in sm])
     # Click a sector row to open it — no separate dropdown needed.
     pick = show_table(secdf, ["4h %", "Today %", "1wk %", "2wk %", "1mo %"],
-                      index_col="Sector", height=430, select_key="sectorpick")
+                      index_col="Sector", select_key="sectorpick")
     st.caption("👆 Tap a sector to see the stocks driving it. "
                "Trend = the sector ETF vs its own 50-day line.")
 
     if pick:
-        n_show = st.slider("Stocks to show", 3, 10, 5, 1, key="secn")
-        mem = mm.sector_members(snap, pick, n=n_show)
+        mem = mm.sector_members(snap, pick, n=10)
         if not mem:
             st.info(f"No {pick} stocks in the scanned universe yet.")
         else:
@@ -344,7 +343,7 @@ if _map == "🌡️ Sectors":
             st.markdown(
                 f"<div class='sechd'>{pick} · today "
                 f"{(row.get('1d') or 0):+.2f}% · 1wk {(row.get('1w') or 0):+.1f}%"
-                f" · {len(mem)} strongest</div>", unsafe_allow_html=True)
+                f" · {len(mem)} driving it</div>", unsafe_allow_html=True)
             mdf = pd.DataFrame([{
                 "Ticker": r["ticker"], "Name": s.name_for(r["ticker"]) or "",
                 "Today %": r["day"], "Money×": r.get("money"),
@@ -354,7 +353,6 @@ if _map == "🌡️ Sectors":
                 "Trend": STATE_LBL.get((r.get("struct") or {}).get("state"), ""),
             } for r in mem])
             show_table(mdf, ["Today %", "1wk %", "1mo %"],
-                       height=60 + 38 * len(mdf),
                        fmt={"Money×": "{:.1f}×", "RVOL": "{:.1f}×"})
             st.caption("Ranked by PULL — the move weighted by the money behind "
                        "it. A 5% pop on thin volume shifts a sector far less "

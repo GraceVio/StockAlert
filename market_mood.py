@@ -718,10 +718,15 @@ def sector_multi(max_age_s=300):
     return out
 
 
-def sector_members(snap, sector, n=5):
+def sector_members(snap, sector, n=10, min_share=0.18, min_move=0.2):
     """The stocks doing the most to MOVE a sector today — not just the biggest
     percentage, but the ones carrying real volume behind it, since a 5% pop on
-    a fifth of normal volume moves an index far less than a 2% push on 3x."""
+    a fifth of normal volume moves an index far less than a 2% push on 3x.
+
+    Returns only the names that are ACTUALLY contributing: at most `n`, and each
+    must pull at least `min_share` of what the leader does and have moved at
+    least `min_move`%. A stock sitting at -0.0% is not driving anything, so
+    padding the list to a fixed count would just be noise."""
     rows = [r for r in (snap or {}).get("rows", [])
             if (r.get("sector") or "") == sector and r.get("day") is not None]
     if not rows:
@@ -730,4 +735,10 @@ def sector_members(snap, sector, n=5):
         r["_pull"] = (r["day"] or 0) * max(0.4, min(3.0, r.get("money") or 1.0))
     up = sum(1 for r in rows if (r["day"] or 0) > 0) >= len(rows) / 2
     rows.sort(key=lambda r: r["_pull"], reverse=up)
-    return rows[:n]
+    top = rows[:n]
+    if not top:
+        return []
+    lead = abs(top[0]["_pull"]) or 1.0
+    keep = [r for r in top
+            if abs(r["_pull"]) >= lead * min_share and abs(r["day"]) >= min_move]
+    return keep or top[:3]
