@@ -568,10 +568,16 @@ def flow_clusters(snap=None, min_corr=0.62, min_size=3, max_groups=4):
     sect = {r["ticker"]: (r.get("sector") or "") for r in rows}
 
     # Seed from the biggest movers (either direction) — that's where flow is.
+    # The threshold ADAPTS: a fixed 1% starved the list pre-market, when only a
+    # handful of names have moved at all (8 of 158 on a typical morning), so only
+    # 2-3 baskets ever appeared. Now it takes roughly the top quarter of today's
+    # movement, with a small floor so pure noise never seeds a "basket".
     order = sorted(corr.columns, key=lambda t: abs(day.get(t, 0)), reverse=True)
+    moves = sorted((abs(day.get(t, 0)) for t in corr.columns), reverse=True)
+    cutoff = max(0.25, moves[max(0, len(moves) // 4 - 1)]) if moves else 0.25
     used, groups = set(), []
     for seed in order:
-        if seed in used or abs(day.get(seed, 0)) < 1.0:
+        if seed in used or abs(day.get(seed, 0)) < cutoff:
             continue
         peers = [t for t in corr.columns
                  if t not in used and t != seed

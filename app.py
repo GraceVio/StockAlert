@@ -90,14 +90,32 @@ st.markdown(f"""<style>
   .sess {{ padding: .35rem .7rem; border-radius: 8px; font-size: .9rem;
            background: rgba(56,139,253,.14); border: 1px solid rgba(56,139,253,.35);
            margin: .1rem 0 .5rem; display: inline-block; }}
-  /* Basket cards */
-  .bk {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem;
-         margin-bottom: .15rem; }}
-  .bk .big {{ font-size: 1.4rem; font-weight: 700; }}
-  .bk .tag {{ font-size: .95rem; font-weight: 600; letter-spacing: .02em; }}
-  .bk .mny {{ font-size: .92rem; opacity: .8; }}
-  .bkn {{ font-size: .98rem; line-height: 1.45; }}
-  .bks {{ font-size: .82rem; opacity: .7; }}
+  /* Basket cards — each block needs its own breathing room, otherwise the
+     wrapped ticker list collides with the sector line underneath. */
+  .bk {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem;
+         margin: 0 0 .5rem 0; padding-bottom: .45rem;
+         border-bottom: 1px solid rgba(128,128,128,.18); }}
+  .bk .big {{ font-size: 1.25rem; font-weight: 700; }}
+  .bk .tag {{ font-size: .9rem; font-weight: 700; letter-spacing: .03em; }}
+  .bk .mny {{ font-size: .88rem; opacity: .75; }}
+  .bkn {{ font-size: .98rem; line-height: 1.7; margin: 0 0 .55rem 0; }}
+  .bkn .tk {{ font-weight: 700; }}
+  .bkn .nm {{ opacity: .78; }}
+  .bks {{ font-size: .82rem; opacity: .65; margin: 0; }}
+  /* Market-map buttons: text-width, side by side, SUBTLE active state. */
+  .maprow div[data-testid="stHorizontalBlock"] {{ flex-wrap: nowrap !important;
+      gap: .4rem; }}
+  .maprow div[data-testid="column"] {{ flex: 0 0 auto !important;
+      width: auto !important; min-width: 0 !important; }}
+  .maprow .stButton > button {{ padding: .18rem .7rem; font-size: .92rem;
+      border-radius: 999px; width: auto; min-height: 0; }}
+  .maprow .stButton > button[kind="primary"] {{
+      background: transparent !important; color: inherit !important;
+      border: 1px solid rgba(128,128,128,.75) !important;
+      box-shadow: inset 0 -2px 0 0 rgba(120,160,255,.9) !important;
+      font-weight: 700; }}
+  .maprow .stButton > button[kind="secondary"] {{
+      border: 1px solid rgba(128,128,128,.3) !important; opacity: .85; }}
 </style>""", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------- password
@@ -238,15 +256,17 @@ st.markdown("<div class='hdr'>" + "".join(bits) + "</div>", unsafe_allow_html=Tr
 # Hidden by default; each button toggles its own panel (click again = close).
 if "map" not in st.session_state:
     st.session_state["map"] = None
-_b1, _b2, _sp = st.columns([1, 1, 3])
-if _b1.button("🌡️ Sectors", use_container_width=True,
+st.markdown('<div class="maprow">', unsafe_allow_html=True)
+_b1, _b2, _sp = st.columns([1, 1, 6])
+if _b1.button("🌡️ Sectors",
               type="primary" if st.session_state["map"] == "sec" else "secondary"):
     st.session_state["map"] = None if st.session_state["map"] == "sec" else "sec"
     st.rerun()
-if _b2.button("🧲 Baskets", use_container_width=True,
+if _b2.button("🧲 Baskets",
               type="primary" if st.session_state["map"] == "bkt" else "secondary"):
     st.session_state["map"] = None if st.session_state["map"] == "bkt" else "bkt"
     st.rerun()
+st.markdown('</div>', unsafe_allow_html=True)
 _map = st.session_state["map"]
 
 # ------------------------------------------------------------- 1. sectors
@@ -285,8 +305,10 @@ if _map == "bkt":
                 f"<span class='mny'>· {g['money']:.1f}× money · "
                 f"{len(g['members'])} stocks</span></div>",
                 unsafe_allow_html=True)
-            names = " · ".join(
-                f"<b>{t}</b> {s.name_for(t) or ''}".strip()
+            names = " &nbsp;·&nbsp; ".join(
+                f"<span class='tk'>{t}</span>"
+                + (f" <span class='nm'>{s.name_for(t)}</span>"
+                   if s.name_for(t) else "")
                 for t in g["members"][:12])
             st.markdown(f"<div class='bkn'>{names}</div>", unsafe_allow_html=True)
             spread = ", ".join(g["sectors"][:3])
@@ -295,9 +317,16 @@ if _map == "bkt":
             st.markdown(f"<div class='bks'>{spread}{note}</div>",
                         unsafe_allow_html=True)
     if groups:
-        st.caption("Only groups of 3+ stocks that move together AND are moving "
-                   "the same way today. A basket spanning several sectors is the "
-                   "useful case — money rotating by theme.")
+        movers = sum(1 for r in rows if abs(r.get("day") or 0) >= 1.0)
+        note = ("Only groups of 3+ stocks that move together AND are moving the "
+                "same way today. A basket spanning several sectors is the useful "
+                "case — money rotating by theme.")
+        if len(groups) < 3:
+            # Be explicit rather than leaving her wondering if it's broken.
+            note += (f" Few baskets right now because only {movers} of {len(rows)} "
+                     "stocks have moved 1%+ today — baskets need real movement to "
+                     "form, so expect more once the US session is running.")
+        st.caption(note)
 
 st.divider()
 tabs = st.tabs(["🔥 Hot money", "🏆 Strongest", "👑 Dip ranking", "🔎 Stock"])
