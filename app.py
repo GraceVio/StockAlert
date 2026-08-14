@@ -48,24 +48,33 @@ st.set_page_config(page_title="StockAlert", page_icon="👑", layout="wide")
 # scales the whole app — text, tables and all — in one go.
 with st.sidebar:
     st.markdown("### ⚙️ Display")
-    _size = st.slider("Text size", 10, 20, 13, 1,
-                      help="Smaller = more rows fit on screen. 13 is compact, "
-                           "16 is the Streamlit default.")
+    _size = st.slider("Text size", 10, 20, 15, 1,
+                      help="Smaller = more rows fit on screen. 16 is the "
+                           "Streamlit default.")
     _dense = st.checkbox("Compact spacing", value=True,
                          help="Trim padding so more fits on a phone screen.")
 
 st.markdown(f"""<style>
   html {{ font-size: {_size}px; }}
-  .block-container {{ padding-top: {'1rem' if _dense else '3rem'};
-                      padding-bottom: 1rem;
+  /* Generous top padding: Streamlit's floating toolbar was clipping the title. */
+  .block-container {{ padding-top: 3.2rem; padding-bottom: 1rem;
+                      padding-left: .8rem; padding-right: .8rem;
                       max-width: 100%; }}
-  {'div[data-testid="stVerticalBlock"] { gap: 0.4rem; }' if _dense else ''}
-  [data-testid="stMetricValue"] {{ font-size: 1.5rem; }}
-  [data-testid="stMetricLabel"] {{ font-size: 0.85rem; }}
-  .stDataFrame {{ font-size: 0.9rem; }}
-  .tg {{ font-size: 0.95rem; line-height: 1.45; }}
-  .tg pre {{ font-size: 0.85rem; background: rgba(128,128,128,.12);
+  {'div[data-testid="stVerticalBlock"] { gap: 0.35rem; }' if _dense else ''}
+  h1 {{ font-size: 1.5rem !important; margin-bottom: 0 !important; }}
+  h2, h3 {{ font-size: 1.15rem !important; }}
+  /* Header stats as one wrapping row of chips instead of tall metric blocks. */
+  .hdr {{ display: flex; flex-wrap: wrap; gap: .4rem .5rem; margin: .1rem 0 .5rem; }}
+  .chip {{ display: flex; flex-direction: column; padding: .3rem .6rem;
+           border: 1px solid rgba(128,128,128,.28); border-radius: 8px;
+           min-width: 6.5rem; }}
+  .chip .lbl {{ font-size: .72rem; opacity: .65; line-height: 1.1; }}
+  .chip .val {{ font-size: .95rem; font-weight: 600; line-height: 1.25; }}
+  .stDataFrame {{ font-size: 0.88rem; }}
+  .tg {{ font-size: 0.92rem; line-height: 1.45; }}
+  .tg pre {{ font-size: 0.82rem; background: rgba(128,128,128,.12);
              padding: .6rem .8rem; border-radius: 6px; overflow-x: auto; }}
+  .stTabs [data-baseweb="tab"] {{ padding: .3rem .55rem; }}
 </style>""", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------- password
@@ -149,17 +158,26 @@ if snap.get("session_note"):
 # --------------------------------------------------------------- mood row
 breadth = snap.get("breadth")
 adv = sum(1 for r in rows if (r.get("day") or 0) > 0)
-m1, m2, m3, m4 = st.columns(4)
+mood = "—"
 if breadth is not None:
-    mood = ("🟢 Risk-ON" if breadth >= 65 else "🙂 Mildly positive" if breadth >= 55
+    mood = ("🟢 Risk-ON" if breadth >= 65 else "🙂 Positive" if breadth >= 55
             else "😐 Mixed" if breadth >= 45 else "🔴 Risk-OFF")
-    m1.metric("Market mood", mood, f"{breadth:.0f}% advancing")
-for (nm, v), col in zip((snap.get("indices") or [])[:2], (m2, m3)):
-    if v is not None:
-        col.metric(nm, pct(v), delta=pct(v), delta_color="normal")
-m4.metric("Stocks scanned", f"{len(rows)}", f"{adv} up / {len(rows)-adv} down")
 
-st.divider()
+
+def _chip(label, value, v=None):
+    """One compact stat. st.metric stacks into a tall block on a phone and ate
+    most of the screen, so the header is a single wrapping row instead."""
+    c = "#16a34a" if (v or 0) > 0 else ("#dc2626" if (v or 0) < 0 else "inherit")
+    return (f"<span class='chip'><span class='lbl'>{label}</span>"
+            f"<span class='val' style='color:{c}'>{value}</span></span>")
+
+
+idx = (snap.get("indices") or [])[:2]
+bits = [_chip("Mood", f"{mood} · {breadth:.0f}% adv" if breadth is not None else mood)]
+for nm, v in idx:
+    bits.append(_chip(nm, pct(v), v))
+bits.append(_chip("Scanned", f"{len(rows)} · {adv}↑ {len(rows)-adv}↓"))
+st.markdown("<div class='hdr'>" + "".join(bits) + "</div>", unsafe_allow_html=True)
 
 tabs = st.tabs(["🌡️ Sectors", "🔥 Hot money", "🧲 Baskets",
                 "🏆 Strongest", "👑 Dip ranking", "🔎 Stock"])
@@ -236,19 +254,23 @@ with tabs[3]:
                    index=3, horizontal=True)
     sel = [r for r in rows if (r.get("spans") or {}).get(win) is not None]
     sel.sort(key=lambda r: r["spans"][win], reverse=True)
-    sdf2 = pd.DataFrame([{
-        "Ticker": r["ticker"], "Name": s.name_for(r["ticker"]) or "",
-        f"{win} %": r["spans"][win],
-        "1d %": (r.get("spans") or {}).get("1d"),
-        "1wk %": (r.get("spans") or {}).get("1w"),
-        "1mo %": (r.get("spans") or {}).get("1m"),
-        "Trend": STATE.get((r.get("struct") or {}).get("state"), ""),
-        "Sector": r.get("sector") or "",
-    } for r in sel[:20]])
+    # Show the chosen window first, then the others — WITHOUT repeating it.
+    # (Picking "1d" used to produce a duplicate "1d %" column, which makes the
+    # pandas styler hand back a DataFrame instead of a Series and blow up.)
+    extras = [k for k in ("1d", "1w", "2w", "1m") if k != win]
+    labels = {"1d": "1d %", "2d": "2d %", "3d": "3d %", "1w": "1wk %",
+              "2w": "2wk %", "3w": "3wk %", "1m": "1mo %"}
+    numcols = [f"▶ {labels[win]}"] + [labels[k] for k in extras]
+    sdf2 = pd.DataFrame([dict(
+        [("Ticker", r["ticker"]), ("Name", s.name_for(r["ticker"]) or ""),
+         (f"▶ {labels[win]}", r["spans"][win])]
+        + [(labels[k], (r.get("spans") or {}).get(k)) for k in extras]
+        + [("Trend", STATE.get((r.get("struct") or {}).get("state"), "")),
+           ("Sector", r.get("sector") or "")]
+    ) for r in sel[:20]])
     st.dataframe(
-        sdf2.style.map(colour, subset=[f"{win} %", "1d %", "1wk %", "1mo %"])
-            .format({f"{win} %": "{:+.1f}%", "1d %": "{:+.1f}%",
-                     "1wk %": "{:+.1f}%", "1mo %": "{:+.1f}%"}, na_rep="—"),
+        sdf2.style.map(colour, subset=numcols)
+            .format({c: "{:+.1f}%" for c in numcols}, na_rep="—"),
         use_container_width=True, hide_index=True, height=560)
 
 # ---------------------------------------------------------- 5. dip ranking
@@ -287,7 +309,9 @@ with tabs[5]:
     if sym:
         syms = [x.strip().upper() for x in sym.replace(";", ",").split(",")
                 if x.strip()][:5]
-        cols = st.columns(len(syms)) if len(syms) > 1 else [st]
+        # NB: must be a real container — the `st` module itself is not a context
+        # manager, which crashed the single-ticker case.
+        cols = st.columns(len(syms)) if len(syms) > 1 else [st.container()]
         for col, one in zip(cols, syms):
             with col:
                 with st.spinner(f"Analysing {one}…"):
