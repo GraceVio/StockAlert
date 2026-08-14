@@ -61,20 +61,27 @@ st.markdown(f"""<style>
                       padding-left: .8rem; padding-right: .8rem;
                       max-width: 100%; }}
   {'div[data-testid="stVerticalBlock"] { gap: 0.35rem; }' if _dense else ''}
-  h1 {{ font-size: 1.5rem !important; margin-bottom: 0 !important; }}
-  h2, h3 {{ font-size: 1.15rem !important; }}
+  h1 {{ font-size: 1.75rem !important; margin-bottom: 0 !important; }}
+  h2, h3 {{ font-size: 1.35rem !important; }}
   /* Header stats as one wrapping row of chips instead of tall metric blocks. */
   .hdr {{ display: flex; flex-wrap: wrap; gap: .4rem .5rem; margin: .1rem 0 .5rem; }}
   .chip {{ display: flex; flex-direction: column; padding: .3rem .6rem;
            border: 1px solid rgba(128,128,128,.28); border-radius: 8px;
            min-width: 6.5rem; }}
-  .chip .lbl {{ font-size: .72rem; opacity: .65; line-height: 1.1; }}
-  .chip .val {{ font-size: .95rem; font-weight: 600; line-height: 1.25; }}
-  .stDataFrame {{ font-size: 0.88rem; }}
-  .tg {{ font-size: 0.92rem; line-height: 1.45; }}
-  .tg pre {{ font-size: 0.82rem; background: rgba(128,128,128,.12);
+  .chip .lbl {{ font-size: .78rem; opacity: .65; line-height: 1.1; }}
+  .chip .val {{ font-size: 1.15rem; font-weight: 600; line-height: 1.25; }}
+  .stDataFrame, .stDataFrame td, .stDataFrame th {{ font-size: 1.05rem; }}
+  .tg {{ font-size: 1.1rem; line-height: 1.5; }}
+  .tg pre {{ font-size: 1.0rem; background: rgba(128,128,128,.12);
              padding: .6rem .8rem; border-radius: 6px; overflow-x: auto; }}
-  .stTabs [data-baseweb="tab"] {{ padding: .3rem .55rem; }}
+  .stTabs [data-baseweb="tab"] {{ padding: .35rem .6rem; font-size: 1.05rem; }}
+  /* Grey helper text stays SMALL — it's context, not something to emphasise. */
+  [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p,
+  .stCaption, small {{ font-size: 0.82rem !important; opacity: .72; }}
+  /* Square refresh button, aligned with the title. */
+  div[data-testid="column"]:last-child .stButton > button {{
+      height: 3rem; width: 3rem; padding: 0; font-size: 1.3rem;
+      border-radius: 10px; }}
 </style>""", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------- password
@@ -142,12 +149,14 @@ def score_colour(v):
 
 # ------------------------------------------------------------------ header
 now = dt.datetime.now(ZoneInfo("Europe/Berlin")).strftime("%d %b %Y, %H:%M CET")
-c1, c2 = st.columns([4, 1])
-c1.title("👑 StockAlert")
-c1.caption(f"Live · {now}")
-if c2.button("🔄 Refresh", use_container_width=True):
-    st.cache_data.clear()
-    st.rerun()
+c1, c2 = st.columns([6, 1], vertical_alignment="center")
+with c1:
+    st.title("👑 StockAlert")
+    st.caption(f"Live · {now}")
+with c2:
+    if st.button("🔄", help="Refresh live data", key="refresh"):
+        st.cache_data.clear()
+        st.rerun()
 
 snap = get_snapshot()
 rows = snap["rows"]
@@ -179,11 +188,15 @@ for nm, v in idx:
 bits.append(_chip("Scanned", f"{len(rows)} · {adv}↑ {len(rows)-adv}↓"))
 st.markdown("<div class='hdr'>" + "".join(bits) + "</div>", unsafe_allow_html=True)
 
-tabs = st.tabs(["🌡️ Sectors", "🔥 Hot money", "🧲 Baskets",
-                "🏆 Strongest", "👑 Dip ranking", "🔎 Stock"])
+# ------------------------------------------------------- market map (top)
+# Sectors and Baskets answer "where is money going" — context you glance at
+# before picking anything. They sit in their own row so the tab bar below stays
+# purely about choosing a stock.
+_map = st.radio("Market map", ["🌡️ Sectors", "🧲 Baskets", "✕ Hide"],
+                index=0, horizontal=True, label_visibility="collapsed")
 
 # ------------------------------------------------------------- 1. sectors
-with tabs[0]:
+if _map.startswith("🌡️"):
     st.subheader("Where money is rotating today")
     sec = snap.get("sectors") or []
     if sec:
@@ -199,36 +212,8 @@ with tabs[0]:
         st.caption("🔥 top of this list = where money is flowing in RIGHT NOW. "
                    "Sector rotation drives most of a stock's daily move.")
 
-# ----------------------------------------------------------- 2. hot money
-with tabs[1]:
-    st.subheader("Biggest movers — and how much money is behind them")
-    hot = sorted([r for r in rows if r.get("day") is not None],
-                 key=lambda r: r["day"], reverse=True)[:20]
-    STATE = {"uptrend": "🪜 uptrend", "stalling": "⚠️ losing steam",
-             "uptrend_broken": "🔻 uptrend broke", "downtrend": "❄️ downtrend",
-             "basing": "〰️ basing", "sideways": "〰️ sideways"}
-    hdf = pd.DataFrame([{
-        "Ticker": r["ticker"], "Name": s.name_for(r["ticker"]) or "",
-        "Today %": r["day"], "Money×": r.get("money"),
-        "Off low %": r.get("recover"),
-        "1wk %": (r.get("spans") or {}).get("1w"),
-        "2wk %": (r.get("spans") or {}).get("2w"),
-        "1mo %": (r.get("spans") or {}).get("1m"),
-        "Trend": STATE.get((r.get("struct") or {}).get("state"), ""),
-        "Sector": r.get("sector") or "",
-    } for r in hot])
-    st.dataframe(
-        hdf.style.map(colour, subset=["Today %", "1wk %", "2wk %", "1mo %"])
-           .format({"Today %": "{:+.1f}%", "Money×": "{:.1f}×",
-                    "Off low %": "{:+.1f}%", "1wk %": "{:+.1f}%",
-                    "2wk %": "{:+.1f}%", "1mo %": "{:+.1f}%"}, na_rep="—"),
-        use_container_width=True, hide_index=True, height=560)
-    st.caption("**Money×** = euros traded today vs this stock's own normal. Above "
-               "~2× means real buyers, not drift. A big move on ~1× volume is not "
-               "backed by institutions. Momentum needs a longer hold — see /mode wide.")
-
 # -------------------------------------------------------------- 3. baskets
-with tabs[2]:
+if _map.startswith("🧲"):
     st.subheader("What big money is trading as one basket")
     st.caption("Found by measuring which stocks MOVE TOGETHER (4 weeks of daily "
                "returns) — not from any fixed sector list. A basket spanning "
@@ -247,8 +232,43 @@ with tabs[2]:
             b.caption(f"{spread}" + (" — cuts across sectors"
                                      if len(g["sectors"]) > 1 else " (one sector)"))
 
+st.divider()
+tabs = st.tabs(["🔥 Hot money", "🏆 Strongest", "👑 Dip ranking", "🔎 Stock"])
+
+# ----------------------------------------------------------- 2. hot money
+with tabs[0]:
+    st.subheader("Where the money is going today")
+    st.caption("Ranked by HEAT — money flow, speed off the low, trend structure "
+               "and sector — not just today's %. That is what makes it different "
+               "from Strongest 1d, which sorts purely on the move.")
+    hot = mm.hot_ranked(snap)[:20]
+    STATE = {"uptrend": "🪜 uptrend", "stalling": "⚠️ losing steam",
+             "uptrend_broken": "🔻 uptrend broke", "downtrend": "❄️ downtrend",
+             "basing": "〰️ basing", "sideways": "〰️ sideways"}
+    hdf = pd.DataFrame([{
+        "Ticker": r["ticker"], "Name": s.name_for(r["ticker"]) or "",
+        "Today %": r["day"], "Money×": r.get("money"), "RVOL": r.get("rvol"),
+        "Off low %": r.get("recover"),
+        "1wk %": (r.get("spans") or {}).get("1w"),
+        "2wk %": (r.get("spans") or {}).get("2w"),
+        "1mo %": (r.get("spans") or {}).get("1m"),
+        "Trend": STATE.get((r.get("struct") or {}).get("state"), ""),
+        "Sector": r.get("sector") or "",
+    } for r in hot])
+    st.dataframe(
+        hdf.style.map(colour, subset=["Today %", "1wk %", "2wk %", "1mo %"])
+           .format({"Today %": "{:+.1f}%", "Money×": "{:.1f}×", "RVOL": "{:.1f}×",
+                    "Off low %": "{:+.1f}%", "1wk %": "{:+.1f}%",
+                    "2wk %": "{:+.1f}%", "1mo %": "{:+.1f}%"}, na_rep="—"),
+        use_container_width=True, hide_index=True, height=560)
+    st.caption("**Money×** = *euros* traded today vs this stock's own normal. "
+               "**RVOL** = *shares* traded vs normal. They usually agree; Money× "
+               "is the better one because it counts the actual capital committed. Above "
+               "~2× means real buyers, not drift. A big move on ~1× volume is not "
+               "backed by institutions. Momentum needs a longer hold — see /mode wide.")
+
 # ------------------------------------------------------------ 4. strongest
-with tabs[3]:
+with tabs[1]:
     st.subheader("Strongest over a chosen window")
     win = st.radio("Window", ["1d", "2d", "3d", "1w", "2w", "3w", "1m"],
                    index=3, horizontal=True)
@@ -274,7 +294,7 @@ with tabs[3]:
         use_container_width=True, hide_index=True, height=560)
 
 # ---------------------------------------------------------- 5. dip ranking
-with tabs[4]:
+with tabs[2]:
     st.subheader("King Stocks — best dip-buy setups now")
     st.caption("The tested edge: deep oversold (RSI under 30) at a tested support "
                "level, with room to run before the next resistance.")
@@ -297,7 +317,7 @@ with tabs[4]:
                "pullback; over 55 = you'd be chasing.")
 
 # -------------------------------------------------------------- 6. one stock
-with tabs[5]:
+with tabs[3]:
     st.subheader("Full breakdown — same as /score in Telegram")
     sym = st.text_input("Ticker(s)", value="",
                         placeholder="NVDA   ·   or several: NVDA, SAP.DE, TTE.PA")

@@ -328,6 +328,47 @@ def mood_text(snap=None):
     return "\n".join(L)
 
 
+def _hot_score(snap):
+    """Heat = how much money, how fast, into what kind of trend."""
+    rows, spy_m = snap["rows"], snap["spy_month"]
+    sec_pct = dict(snap["sectors"])
+    sec_rank = {n: i + 1 for i, (n, _) in enumerate(snap["sectors"])}
+    scored = []
+    for r in rows:
+        if r["month"] is None or r["day"] is None:
+            continue
+        rs = r["month"] - (spy_m or 0.0)
+        rv = r.get("rvol") or 1.0
+        mf = r.get("money") or 1.0
+        sp = sec_pct.get(r["sector"], 0.0)
+        rec = r.get("recover") or 0.0
+        sm2, sm3 = r.get("smooth2"), r.get("smooth3")
+        m2 = r.get("mon2") or 0.0
+        m3 = r.get("mon3") or 0.0
+        state = (r.get("struct") or {}).get("state")
+        heat = ((mf - 1.0) * 10.0
+                + r["day"] * 2.0
+                + rec * 1.0
+                + (m2 * 0.12 if m2 > 0 else m2 * 0.06)
+                + {"uptrend": 8.0, "stalling": 2.0, "sideways": 0.0, "basing": 0.0,
+                   "uptrend_broken": -4.0, "downtrend": -6.0}.get(state, 0.0)
+                + (2.0 if (sm3 or 0) > 0.4 and m3 > 0 else 0.0)
+                + sp * 3.0)
+        star = (rs > 5 and rv > 1.5 and (r["week"] or 0) > 0 and state == "uptrend")
+        scored.append({**r, "rs": rs, "heat": heat, "star": star, "mf": mf,
+                       "sec_rank": sec_rank.get(r["sector"])})
+    scored.sort(key=lambda x: x["heat"], reverse=True)
+    return scored
+
+
+def hot_ranked(snap=None):
+    """The scored + sorted momentum list. Split out of hot_text() so the
+    dashboard ranks EXACTLY the same way the Telegram /hot does — one formula,
+    one place, no chance of the two drifting apart."""
+    snap = snap or snapshot()
+    return _hot_score(snap)
+
+
 def hot_text(snap=None, top_n=8):
     """MOMENTUM ranking — the opposite of /rank. Ranks by where money is moving:
     today's move, unusual volume, 1-month strength vs the market, sector heat.
@@ -336,11 +377,10 @@ def hot_text(snap=None, top_n=8):
     2-5 days did NOT beat the dip system. The ⭐ flag marks the ONE combination
     that did test well (RS>5% + RVOL>1.5x + near highs = 54% win / +0.184 R)."""
     snap = snap or snapshot()
-    rows, spy_m = snap["rows"], snap["spy_month"]
+    scored = _hot_score(snap)
     sec_rank = {n: i + 1 for i, (n, _) in enumerate(snap["sectors"])}
     sec_pct = dict(snap["sectors"])
-
-    scored = []
+    _UNUSED = """
     for r in rows:
         if r["month"] is None or r["day"] is None:
             continue
@@ -377,7 +417,8 @@ def hot_text(snap=None, top_n=8):
                 and (r.get("struct") or {}).get("state") == "uptrend")
         scored.append({**r, "rs": rs, "heat": heat, "star": star,
                        "mf": mf, "sec_rank": sec_rank.get(r["sector"])})
-    scored.sort(key=lambda x: x["heat"], reverse=True)
+    """
+    del _UNUSED
 
     L = [f"🔥 <b>Hot Money — where it's moving now</b>",
          f"<i>Asked: {_stamp()}</i>", ""]
