@@ -78,10 +78,26 @@ st.markdown(f"""<style>
   /* Grey helper text stays SMALL — it's context, not something to emphasise. */
   [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p,
   .stCaption, small {{ font-size: 0.82rem !important; opacity: .72; }}
-  /* Square refresh button, aligned with the title. */
-  div[data-testid="column"]:last-child .stButton > button {{
-      height: 3rem; width: 3rem; padding: 0; font-size: 1.3rem;
-      border-radius: 10px; }}
+  /* Title row must stay side-by-side on a phone (Streamlit stacks columns on
+     narrow screens by default, which pushed Refresh onto its own line). */
+  .hdrow div[data-testid="stHorizontalBlock"] {{ flex-wrap: nowrap !important; }}
+  .hdrow div[data-testid="column"]:last-child {{ flex: 0 0 auto !important;
+      width: auto !important; min-width: 0 !important;
+      display: flex; align-items: flex-start; justify-content: flex-end; }}
+  .hdrow .stButton > button {{ height: 2.6rem; width: 2.6rem; padding: 0;
+      font-size: 1.2rem; border-radius: 10px; }}
+  /* Compact session banner — the colour already does the shouting. */
+  .sess {{ padding: .35rem .7rem; border-radius: 8px; font-size: .9rem;
+           background: rgba(56,139,253,.14); border: 1px solid rgba(56,139,253,.35);
+           margin: .1rem 0 .5rem; display: inline-block; }}
+  /* Basket cards */
+  .bk {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem;
+         margin-bottom: .15rem; }}
+  .bk .big {{ font-size: 1.4rem; font-weight: 700; }}
+  .bk .tag {{ font-size: .95rem; font-weight: 600; letter-spacing: .02em; }}
+  .bk .mny {{ font-size: .92rem; opacity: .8; }}
+  .bkn {{ font-size: .98rem; line-height: 1.45; }}
+  .bks {{ font-size: .82rem; opacity: .7; }}
 </style>""", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------- password
@@ -129,6 +145,30 @@ def colour(v):
         "color:#dc2626;font-weight:600" if v < 0 else "")
 
 
+def show_table(df, numeric, index_col="Ticker", height=560, extra=None):
+    """One table style for the whole app.
+
+    * Ticker becomes the INDEX — Streamlit keeps the index column PINNED while
+      you scroll sideways, so you never lose track of which stock a row is.
+    * Every numeric column is ROUNDED before display. The styler only changes
+      how a value LOOKS; the underlying float stays full precision and Streamlit
+      shows it raw when you tap a cell (that "-17.657046195940506" box). Rounding
+      the data itself means the tap shows -17.7 — the same number you can see.
+    """
+    d = df.copy()
+    for c in numeric:
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors="coerce").round(1)
+    if index_col in d.columns:
+        d = d.set_index(index_col)
+    sty = d.style.map(colour, subset=[c for c in numeric if c in d.columns])
+    if extra:
+        sty = extra(sty)
+    st.dataframe(sty.format({c: "{:+.1f}%" for c in numeric if c in d.columns},
+                            na_rep="—"),
+                 use_container_width=True, height=height)
+
+
 def score_colour(v):
     """Green→amber→red band for the 0-100 score. Written by hand instead of
     pandas' background_gradient, which pulls in matplotlib — not installed on
@@ -149,7 +189,8 @@ def score_colour(v):
 
 # ------------------------------------------------------------------ header
 now = dt.datetime.now(ZoneInfo("Europe/Berlin")).strftime("%d %b %Y, %H:%M CET")
-c1, c2 = st.columns([6, 1], vertical_alignment="center")
+st.markdown('<div class="hdrow">', unsafe_allow_html=True)
+c1, c2 = st.columns([8, 1])
 with c1:
     st.title("👑 StockAlert")
     st.caption(f"Live · {now}")
@@ -157,12 +198,14 @@ with c2:
     if st.button("🔄", help="Refresh live data", key="refresh"):
         st.cache_data.clear()
         st.rerun()
+st.markdown('</div>', unsafe_allow_html=True)
 
 snap = get_snapshot()
 rows = snap["rows"]
 
 if snap.get("session_note"):
-    st.info(f"🕒 {snap['session_note']}")
+    st.markdown(f"<div class='sess'>🕒 {snap['session_note']}</div>",
+                unsafe_allow_html=True)
 
 # --------------------------------------------------------------- mood row
 breadth = snap.get("breadth")
@@ -192,11 +235,22 @@ st.markdown("<div class='hdr'>" + "".join(bits) + "</div>", unsafe_allow_html=Tr
 # Sectors and Baskets answer "where is money going" — context you glance at
 # before picking anything. They sit in their own row so the tab bar below stays
 # purely about choosing a stock.
-_map = st.radio("Market map", ["🌡️ Sectors", "🧲 Baskets", "✕ Hide"],
-                index=0, horizontal=True, label_visibility="collapsed")
+# Hidden by default; each button toggles its own panel (click again = close).
+if "map" not in st.session_state:
+    st.session_state["map"] = None
+_b1, _b2, _sp = st.columns([1, 1, 3])
+if _b1.button("🌡️ Sectors", use_container_width=True,
+              type="primary" if st.session_state["map"] == "sec" else "secondary"):
+    st.session_state["map"] = None if st.session_state["map"] == "sec" else "sec"
+    st.rerun()
+if _b2.button("🧲 Baskets", use_container_width=True,
+              type="primary" if st.session_state["map"] == "bkt" else "secondary"):
+    st.session_state["map"] = None if st.session_state["map"] == "bkt" else "bkt"
+    st.rerun()
+_map = st.session_state["map"]
 
 # ------------------------------------------------------------- 1. sectors
-if _map.startswith("🌡️"):
+if _map == "sec":
     st.subheader("Where money is rotating today")
     sec = snap.get("sectors") or []
     if sec:
@@ -205,32 +259,45 @@ if _map.startswith("🌡️"):
         sdf["1 month %"] = [strength.get(n, {}).get("month") for n in sdf["Sector"]]
         sdf["Trend"] = ["🟢 up" if strength.get(n, {}).get("strong") else "🔴 weak"
                         for n in sdf["Sector"]]
-        st.dataframe(
-            sdf.style.map(colour, subset=["Today %", "1 month %"])
-               .format({"Today %": "{:+.2f}%", "1 month %": "{:+.1f}%"}),
-            use_container_width=True, hide_index=True)
+        show_table(sdf, ["Today %", "1 month %"], index_col="Sector", height=420)
         st.caption("🔥 top of this list = where money is flowing in RIGHT NOW. "
                    "Sector rotation drives most of a stock's daily move.")
 
 # -------------------------------------------------------------- 3. baskets
-if _map.startswith("🧲"):
+if _map == "bkt":
     st.subheader("What big money is trading as one basket")
     st.caption("Found by measuring which stocks MOVE TOGETHER (4 weeks of daily "
                "returns) — not from any fixed sector list. A basket spanning "
                "several sectors means money is rotating by THEME.")
-    groups = mm.flow_clusters(snap)
+    groups = mm.flow_clusters(snap, max_groups=6)
     if not groups:
         st.info("No clear baskets right now — today's moves look stock-specific "
                 "rather than a coordinated rotation. (Quiet before the US open.)")
     for g in groups:
-        head = "🟢 BUYING" if g["up"] else "🔴 SELLING"
+        tag = "🟢 BUYING" if g["up"] else "🔴 SELLING"
+        col = "#16a34a" if g["up"] else "#dc2626"
         with st.container(border=True):
-            a, b = st.columns([1, 3])
-            a.metric(head, f"{g['avg']:+.1f}%", f"{g['money']:.1f}× money")
-            b.write("**" + " · ".join(g["members"][:10]) + "**")
+            # One line: what · how much · how much money. The metric widget made
+            # the % enormous and pushed everything onto separate rows.
+            st.markdown(
+                f"<div class='bk'><span class='tag' style='color:{col}'>{tag}</span>"
+                f"<span class='big' style='color:{col}'>{g['avg']:+.1f}%</span>"
+                f"<span class='mny'>· {g['money']:.1f}× money · "
+                f"{len(g['members'])} stocks</span></div>",
+                unsafe_allow_html=True)
+            names = " · ".join(
+                f"<b>{t}</b> {s.name_for(t) or ''}".strip()
+                for t in g["members"][:12])
+            st.markdown(f"<div class='bkn'>{names}</div>", unsafe_allow_html=True)
             spread = ", ".join(g["sectors"][:3])
-            b.caption(f"{spread}" + (" — cuts across sectors"
-                                     if len(g["sectors"]) > 1 else " (one sector)"))
+            note = (" — cuts across sectors" if len(g["sectors"]) > 1
+                    else " (one sector)")
+            st.markdown(f"<div class='bks'>{spread}{note}</div>",
+                        unsafe_allow_html=True)
+    if groups:
+        st.caption("Only groups of 3+ stocks that move together AND are moving "
+                   "the same way today. A basket spanning several sectors is the "
+                   "useful case — money rotating by theme.")
 
 st.divider()
 tabs = st.tabs(["🔥 Hot money", "🏆 Strongest", "👑 Dip ranking", "🔎 Stock"])
@@ -255,12 +322,9 @@ with tabs[0]:
         "Trend": STATE.get((r.get("struct") or {}).get("state"), ""),
         "Sector": r.get("sector") or "",
     } for r in hot])
-    st.dataframe(
-        hdf.style.map(colour, subset=["Today %", "1wk %", "2wk %", "1mo %"])
-           .format({"Today %": "{:+.1f}%", "Money×": "{:.1f}×", "RVOL": "{:.1f}×",
-                    "Off low %": "{:+.1f}%", "1wk %": "{:+.1f}%",
-                    "2wk %": "{:+.1f}%", "1mo %": "{:+.1f}%"}, na_rep="—"),
-        use_container_width=True, hide_index=True, height=560)
+    for _c in ("Money×", "RVOL"):
+        hdf[_c] = pd.to_numeric(hdf[_c], errors="coerce").round(1)
+    show_table(hdf, ["Today %", "Off low %", "1wk %", "2wk %", "1mo %"])
     st.caption("**Money×** = *euros* traded today vs this stock's own normal. "
                "**RVOL** = *shares* traded vs normal. They usually agree; Money× "
                "is the better one because it counts the actual capital committed. Above "
@@ -288,10 +352,7 @@ with tabs[1]:
         + [("Trend", STATE.get((r.get("struct") or {}).get("state"), "")),
            ("Sector", r.get("sector") or "")]
     ) for r in sel[:20]])
-    st.dataframe(
-        sdf2.style.map(colour, subset=numcols)
-            .format({c: "{:+.1f}%" for c in numcols}, na_rep="—"),
-        use_container_width=True, hide_index=True, height=560)
+    show_table(sdf2, numcols)
 
 # ---------------------------------------------------------- 5. dip ranking
 with tabs[2]:
@@ -307,18 +368,21 @@ with tabs[2]:
         "In range %": r.get("range_pos"),
         "Sector": (r.get("sector") or {}).get("name", "") if isinstance(r.get("sector"), dict) else "",
     } for r in rrows])
+    for _c, _n in (("Price", 2), ("RSI", 0), ("Room", 1), ("In range %", 0)):
+        rdf[_c] = pd.to_numeric(rdf[_c], errors="coerce").round(_n)
+    rdf = rdf.set_index("Ticker")
     st.dataframe(
         rdf.style.map(score_colour, subset=["Score"])
            .format({"Price": "{:.2f}", "RSI": "{:.0f}", "Room": "{:.1f}R",
                     "In range %": "{:.0f}%"}, na_rep="—"),
-        use_container_width=True, hide_index=True, height=560)
+        use_container_width=True, height=560)
     st.caption("**Room** = how far to the next resistance, in units of your stop. "
                "Under 1R the target is blocked. **In range %** under 40 = a real "
                "pullback; over 55 = you'd be chasing.")
 
 # -------------------------------------------------------------- 6. one stock
 with tabs[3]:
-    st.subheader("Full breakdown — same as /score in Telegram")
+    st.subheader("Full breakdown")
     sym = st.text_input("Ticker(s)", value="",
                         placeholder="NVDA   ·   or several: NVDA, SAP.DE, TTE.PA")
     quick = st.session_state.get("quick_sym")
