@@ -43,6 +43,31 @@ import rank_today as rk                  # noqa: E402
 
 st.set_page_config(page_title="StockAlert", page_icon="👑", layout="wide")
 
+# ------------------------------------------------------------- text size
+# Streamlit sizes almost everything in rem, so changing the ROOT font size
+# scales the whole app — text, tables and all — in one go.
+with st.sidebar:
+    st.markdown("### ⚙️ Display")
+    _size = st.slider("Text size", 10, 20, 13, 1,
+                      help="Smaller = more rows fit on screen. 13 is compact, "
+                           "16 is the Streamlit default.")
+    _dense = st.checkbox("Compact spacing", value=True,
+                         help="Trim padding so more fits on a phone screen.")
+
+st.markdown(f"""<style>
+  html {{ font-size: {_size}px; }}
+  .block-container {{ padding-top: {'1rem' if _dense else '3rem'};
+                      padding-bottom: 1rem;
+                      max-width: 100%; }}
+  {'div[data-testid="stVerticalBlock"] { gap: 0.4rem; }' if _dense else ''}
+  [data-testid="stMetricValue"] {{ font-size: 1.5rem; }}
+  [data-testid="stMetricLabel"] {{ font-size: 0.85rem; }}
+  .stDataFrame {{ font-size: 0.9rem; }}
+  .tg {{ font-size: 0.95rem; line-height: 1.45; }}
+  .tg pre {{ font-size: 0.85rem; background: rgba(128,128,128,.12);
+             padding: .6rem .8rem; border-radius: 6px; overflow-x: auto; }}
+</style>""", unsafe_allow_html=True)
+
 # ----------------------------------------------------------------- password
 try:
     _pw = st.secrets.get("DASH_PASSWORD")
@@ -251,17 +276,44 @@ with tabs[4]:
 
 # -------------------------------------------------------------- 6. one stock
 with tabs[5]:
-    st.subheader("Full breakdown for one stock")
-    sym = st.text_input("Ticker", value="", placeholder="NVDA, SAP.DE, TTE.PA …")
+    st.subheader("Full breakdown — same as /score in Telegram")
+    sym = st.text_input("Ticker(s)", value="",
+                        placeholder="NVDA   ·   or several: NVDA, SAP.DE, TTE.PA")
+    quick = st.session_state.get("quick_sym")
+    if quick and not sym:
+        sym = quick
+        st.session_state["quick_sym"] = None
+
     if sym:
-        with st.spinner(f"Analysing {sym.upper()}…"):
-            html = rk.score_one(sym)
-        st.markdown(
-            html.replace("<b>", "**").replace("</b>", "**")
-                .replace("<i>", "_").replace("</i>", "_")
-                .replace("<pre>", "\n```\n").replace("</pre>", "\n```\n")
-                .replace("<code>", "`").replace("</code>", "`")
-                .replace("&amp;", "&"))
+        syms = [x.strip().upper() for x in sym.replace(";", ",").split(",")
+                if x.strip()][:5]
+        cols = st.columns(len(syms)) if len(syms) > 1 else [st]
+        for col, one in zip(cols, syms):
+            with col:
+                with st.spinner(f"Analysing {one}…"):
+                    try:
+                        html = rk.score_one(one)
+                    except Exception as e:
+                        st.error(f"{one}: {e}")
+                        continue
+                # score_one already returns valid HTML (<b>/<i>/<pre>) — the very
+                # same string Telegram renders — so show it as-is instead of
+                # converting to markdown. Guarantees the dashboard and the bot
+                # can never word things differently. Only newlines need bridging.
+                st.markdown(f"<div class='tg'>{html.replace(chr(10), '<br>')}</div>",
+                            unsafe_allow_html=True)
+    else:
+        st.caption("Type a ticker above, or jump straight from the ranking:")
+        try:
+            picks = [r["ticker"] for r in get_rank(15)][:8]
+        except Exception:
+            picks = []
+        bcols = st.columns(min(4, len(picks)) or 1)
+        for i, tk in enumerate(picks):
+            if bcols[i % len(bcols)].button(tk, key=f"q{tk}",
+                                            use_container_width=True):
+                st.session_state["quick_sym"] = tk
+                st.rerun()
 
 st.divider()
 st.caption("Scores rate ENTRY QUALITY right now — they are not price predictions. "
