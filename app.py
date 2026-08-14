@@ -187,13 +187,18 @@ def show_table(df, numeric, index_col="Ticker", height=None, extra=None,
     if extra:
         sty = extra(sty)
     styled = sty.format(spec, na_rep="—")
+    # Only pass `height` when we actually want one. Newer Streamlit VALIDATES the
+    # argument and rejects None outright (StreamlitInvalidHeightError), so the
+    # kwarg has to be omitted rather than passed as None to get auto-sizing.
+    kw = {"use_container_width": True}
+    if height is not None:
+        kw["height"] = height
     if select_key:
-        ev = st.dataframe(styled, use_container_width=True, height=height,
-                          on_select="rerun", selection_mode="single-row",
-                          key=select_key)
+        ev = st.dataframe(styled, on_select="rerun",
+                          selection_mode="single-row", key=select_key, **kw)
         picked = list(getattr(ev, "selection", {}).get("rows", []) or [])
         return d.index[picked[0]] if picked else None
-    st.dataframe(styled, use_container_width=True, height=height)
+    st.dataframe(styled, **kw)
     return None
 
 
@@ -472,7 +477,7 @@ with tabs[2]:
         rdf.style.map(score_colour, subset=["Score"])
            .format({"Price": "{:.2f}", "RSI": "{:.0f}", "Room": "{:.1f}R",
                     "In range %": "{:.0f}%"}, na_rep="—"),
-        use_container_width=True, height=560)
+        use_container_width=True)
     st.caption("**Room** = how far to the next resistance, in units of your stop. "
                "Under 1R the target is blocked. **In range %** under 40 = a real "
                "pullback; over 55 = you'd be chasing.")
@@ -594,7 +599,7 @@ with tabs[4]:
                              use_container_width=True)
     else:
         st.dataframe(wdf.sort_values("Ticker").set_index("Ticker"),
-                     use_container_width=True, height=560)
+                     use_container_width=True)
 
 st.divider()
 st.caption("Scores rate ENTRY QUALITY right now — they are not price predictions. "
