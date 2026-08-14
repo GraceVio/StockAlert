@@ -154,9 +154,17 @@ def snapshot(universe=None):
             # Use the LIVE price when we have one; the reference is then the last
             # COMPLETED session's close, so pre-market gaps show up immediately.
             px_live = live.get(t)
+            # Reference = the last daily close BEFORE today. Before the US open
+            # there is no bar for today yet, so the last bar IS yesterday's close
+            # and must be used as the reference, not skipped. Getting this wrong
+            # is why /hot looked frozen at yesterday's numbers.
+            today_local = dt.datetime.now(ZoneInfo("America/New_York")).date()
+            try:
+                bar_is_today = c.index[-1].date() == today_local
+            except Exception:
+                bar_is_today = False
+            prev_close = float(c.iloc[-2]) if (bar_is_today and len(c) > 1) else float(c.iloc[-1])
             if px_live and px_live > 0:
-                prev_close = float(c.iloc[-2]) if len(c) > 1 else float(c.iloc[-1])
-                # If today's daily bar already exists, compare against yesterday.
                 day = (px_live / prev_close - 1) * 100.0
                 price = px_live
             else:
@@ -172,6 +180,12 @@ def snapshot(universe=None):
             wk2 = (price / float(c.iloc[-11]) - 1) * 100 if len(c) > 11 else None
             mon2 = (price / float(c.iloc[-43]) - 1) * 100 if len(c) > 43 else None
             mon3 = (price / float(c.iloc[-63]) - 1) * 100 if len(c) > 63 else None
+            base = 0 if bar_is_today else 1      # so "1 day" means yesterday->now
+            def _ret(n):
+                i = n + base
+                return (price / float(c.iloc[-i]) - 1) * 100 if len(c) > i else None
+            spans = {"1d": day, "2d": _ret(2), "3d": _ret(3), "1w": _ret(5),
+                     "2w": _ret(10), "3w": _ret(15), "1m": _ret(21)}
             # Steadiness over 1 month AND 3 months — momentum is a 3-12 month
             # effect in the research, so the wider window is the honest one; the
             # 1-month view says whether it is still intact right now.
@@ -208,6 +222,8 @@ def snapshot(universe=None):
                          "smooth3": smooth3, "money": money, "lo_pct": lo_pct,
                          "hi_pct": hi_pct, "recover": recover, "price": price,
                          "wk2": wk2, "mon2": mon2, "smooth2": smooth2,
+                         "spans": spans, "struct": s.trend_structure(d),
+                         "rets": (c.pct_change().tail(21) * 100).tolist(),
                          "live": bool(px_live),
                          "currency": s.ticker_currency(t),
                          "sector": (s.SECTOR_MAP.get(t) or "")})
@@ -350,13 +366,15 @@ def hot_text(snap=None, top_n=8):
                 + r["day"] * 2.0
                 + rec * 1.0
                 + (m2 * 0.12 if m2 > 0 else m2 * 0.06)
-                + ((sm2 or 0) * 6.0)
+                + {"uptrend": 8.0, "stalling": 2.0, "sideways": 0.0, "basing": 0.0,
+                   "uptrend_broken": -4.0, "downtrend": -6.0,
+                   "unclear": 0.0}.get((r.get("struct") or {}).get("state"), 0.0)
                 + (2.0 if (sm3 or 0) > 0.4 and m3 > 0 else 0.0)
                 + sp * 3.0)
         # ⭐ = the one combination that backtested well, now also requiring the
         # longer trend to be intact (momentum needs a longer hold to pay).
         star = (rs > 5 and rv > 1.5 and (r["week"] or 0) > 0
-                and (sm2 is None or sm2 > 0.3))
+                and (r.get("struct") or {}).get("state") == "uptrend")
         scored.append({**r, "rs": rs, "heat": heat, "star": star,
                        "mf": mf, "sec_rank": sec_rank.get(r["sector"])})
     scored.sort(key=lambda x: x["heat"], reverse=True)
@@ -392,29 +410,28 @@ def hot_text(snap=None, top_n=8):
                 speed = f" · 🚀 climbed <b>{rec:.1f}%</b> off its low"
             L.append(f"   today's swing {lo:+.1f}% → {hi:+.1f}%{speed}")
         # TREND, wide view (3 months) plus whether it is still intact.
-        sm, sm2, sm3 = r.get("smooth"), r.get("smooth2"), r.get("smooth3")
-        m2, m3 = r.get("mon2"), r.get("mon3")
-        # The trend is DEFINED by the 1-2 month picture; 3 months only confirms.
-        define = sm2 if sm2 is not None else sm
-        span = m2 if m2 is not None else r["month"]
-        if define is not None and span is not None:
-            if define >= 0.7 and span > 0:
-                shape = f"🪜 <b>steady climb</b> over 2 months ({span:+.0f}%)"
-            elif span > 0:
-                shape = f"↗️ up over 2 months ({span:+.0f}%) but choppy"
-            elif define <= -0.7:
-                shape = (f"⚠️ <b>falling for weeks</b> ({span:+.0f}%) — today is "
-                         "probably a bounce, not a recovery")
-            else:
-                shape = f"〰️ no clear direction ({span:+.0f}%)"
+        st = r.get("struct") or {}
+        m2, m3, sm3 = r.get("mon2"), r.get("mon3"), r.get("smooth3")
+        span = f" ({m2:+.0f}% in 2mo)" if m2 is not None else ""
+        SHAPES = {
+            "uptrend":        f"🪜 <b>UPTREND</b> — higher highs &amp; higher lows{span}",
+            "stalling":       f"⚠️ <b>climb losing steam</b> — higher lows but no new highs{span}",
+            "uptrend_broken": f"🔻 <b>uptrend BROKE</b> — price fell under its last higher low{span}",
+            "downtrend":      f"❄️ <b>DOWNTREND</b> — lower highs &amp; lower lows{span}",
+            "basing":         f"〰️ building a base — lower highs but holding its lows{span}",
+            "sideways":       f"〰️ no clear higher-high / higher-low pattern{span}",
+        }
+        if st.get("state") in SHAPES:
             extra = ""
-            if sm is not None and define > 0.5 and sm < 0:
-                extra = " · ⚠️ but it has stalled this month"
-            elif sm3 is not None and m3 is not None and define > 0.5 and sm3 > 0.4 and m3 > 0:
+            if st["state"] == "uptrend" and sm3 is not None and m3 is not None                     and sm3 > 0.4 and m3 > 0:
                 extra = " · ✅ 3-month trend confirms it"
-            L.append(f"   {shape}{extra}")
-        L.append(f"   1wk {(r['week'] or 0):+.1f}% · 2wk {(r.get('wk2') or 0):+.1f}% "
-                 f"· 1mo {r['month']:+.1f}% · vs market {r['rs']:+.0f}%")
+            L.append(f"   {SHAPES[st['state']]}{extra}")
+        sp = r.get("spans") or {}
+        def _f(k):
+            v = sp.get(k)
+            return f"{v:+.1f}%" if v is not None else "–"
+        L.append(f"   2d {_f('2d')} · 1wk {_f('1w')} · 2wk {_f('2w')} · 1mo {_f('1m')} "
+                 f"· vs market {r['rs']:+.0f}%")
         rk = f" (#{r['sec_rank']} today)" if r["sec_rank"] else ""
         if r["sector"]:
             L.append(f"   Sector {r['sector']}: {sec_pct.get(r['sector'], 0):+.1f}%{rk}"
@@ -438,3 +455,139 @@ if __name__ == "__main__":
                  .replace("<i>", "").replace("</i>", "")
                  .encode("ascii", "replace").decode("ascii"))
         print("\n" + "=" * 60 + "\n")
+
+
+# ---------------------------------------------------------------- timeframes
+SPAN_LABEL = {"1d": "1 day", "2d": "2 days", "3d": "3 days", "1w": "1 week",
+              "2w": "2 weeks", "3w": "3 weeks", "1m": "1 month"}
+SPAN_ALIAS = {"1": "1d", "1d": "1d", "day": "1d", "today": "1d",
+              "2": "2d", "2d": "2d", "3": "3d", "3d": "3d",
+              "w": "1w", "1w": "1w", "week": "1w", "7d": "1w",
+              "2w": "2w", "2week": "2w", "3w": "3w",
+              "m": "1m", "1m": "1m", "month": "1m", "30d": "1m"}
+
+
+def strongest_text(span="1w", top_n=10, snap=None):
+    """Strongest movers over ONE chosen window — 1d / 2d / 3d / 1w / 2w / 3w / 1m.
+    Lets the same universe be compared across horizons instead of only today."""
+    key = SPAN_ALIAS.get((span or "").strip().lower(), "1w")
+    snap = snap or snapshot()
+    rows = [r for r in snap["rows"] if (r.get("spans") or {}).get(key) is not None]
+    if not rows:
+        return "No data for that period. Try /strong 1w"
+    rows.sort(key=lambda r: r["spans"][key], reverse=True)
+    L = [f"🏆 <b>Strongest over {SPAN_LABEL[key]}</b>",
+         f"<i>Asked: {_stamp()}</i>", ""]
+    for i, r in enumerate(rows[:top_n], 1):
+        nm = s.name_for(r["ticker"])
+        title = r["ticker"] + (f" · {nm}" if nm else "")
+        st = (r.get("struct") or {}).get("state")
+        mark = {"uptrend": "🪜", "stalling": "⚠️", "uptrend_broken": "🔻",
+                "downtrend": "❄️"}.get(st, "")
+        sp = r["spans"]
+        others = " · ".join(f"{k} {sp[k]:+.0f}%" for k in ("1d", "1w", "2w", "1m")
+                            if k != key and sp.get(k) is not None)
+        L.append(f"<b>{i}. {title}</b> — <b>{sp[key]:+.1f}%</b> {mark}")
+        L.append(f"   {others}")
+    L.append("")
+    L.append("<i>🪜 uptrend (higher highs &amp; higher lows) · ⚠️ losing steam · "
+             "🔻 uptrend broke · ❄️ downtrend.\n"
+             "Compare windows: <code>/strong 1d</code> · <code>2d</code> · "
+             "<code>3d</code> · <code>1w</code> · <code>2w</code> · "
+             "<code>3w</code> · <code>1m</code></i>")
+    return "\n".join(L)
+
+
+# ------------------------------------------------------- money-flow clusters
+def flow_clusters(snap=None, min_corr=0.62, min_size=3, max_groups=4):
+    """WHICH STOCKS ARE BEING BOUGHT AS A BASKET RIGHT NOW — discovered from the
+    data, not from a fixed sector list.
+
+    Grace's insight: institutions trade correlated BASKETS, and those baskets cut
+    straight through the official sectors (a "Technology" list mixes AI hardware,
+    legacy IT and software, which trade completely differently). Any hand-written
+    taxonomy is out of date the moment the market rotates.
+
+    So instead of labelling, we MEASURE: correlate the last ~4 weeks of daily
+    returns, then greedily group names that move together AND are moving today.
+    The result is whatever the market is actually treating as one trade.
+    """
+    snap = snap or snapshot()
+    rows = [r for r in snap["rows"]
+            if r.get("rets") and len([x for x in r["rets"] if x == x]) >= 12]
+    if len(rows) < 6:
+        return []
+    df = pd.DataFrame({r["ticker"]: pd.Series(r["rets"]).reset_index(drop=True)
+                       for r in rows}).dropna(axis=1, how="any")
+    if df.shape[1] < 6:
+        return []
+    corr = df.corr()
+    day = {r["ticker"]: (r.get("day") or 0.0) for r in rows}
+    money = {r["ticker"]: (r.get("money") or 1.0) for r in rows}
+    sect = {r["ticker"]: (r.get("sector") or "") for r in rows}
+
+    # Seed from the biggest movers (either direction) — that's where flow is.
+    order = sorted(corr.columns, key=lambda t: abs(day.get(t, 0)), reverse=True)
+    used, groups = set(), []
+    for seed in order:
+        if seed in used or abs(day.get(seed, 0)) < 1.0:
+            continue
+        peers = [t for t in corr.columns
+                 if t not in used and t != seed
+                 and corr.at[seed, t] >= min_corr
+                 and day.get(t, 0) * day.get(seed, 0) > 0]   # same direction
+        members = [seed] + peers
+        if len(members) < min_size:
+            continue
+        used.update(members)
+        members.sort(key=lambda t: day.get(t, 0), reverse=day.get(seed, 0) > 0)
+        avg = sum(day.get(t, 0) for t in members) / len(members)
+        mf = sum(money.get(t, 1.0) for t in members) / len(members)
+        secs = {}
+        for t in members:
+            if sect.get(t):
+                secs[sect[t]] = secs.get(sect[t], 0) + 1
+        groups.append({"members": members, "avg": avg, "money": mf,
+                       "sectors": sorted(secs, key=secs.get, reverse=True),
+                       "up": avg > 0})
+        if len(groups) >= max_groups:
+            break
+    groups.sort(key=lambda g: abs(g["avg"]), reverse=True)
+    return groups
+
+
+def flow_text(snap=None):
+    """The '/flow' report — where money is actually going, as baskets."""
+    snap = snap or snapshot()
+    gs = flow_clusters(snap)
+    L = [f"🧲 <b>Money Flow — what's moving as a basket</b>",
+         f"<i>Asked: {_stamp()}</i>"]
+    if snap.get("session_note"):
+        L.append(f"<i>🕒 {snap['session_note']}</i>")
+    L.append("")
+    if not gs:
+        L.append("No clear baskets right now — today's moves look stock-specific "
+                 "rather than a coordinated rotation.")
+        return "\n".join(L)
+    L.append("<i>Groups found by measuring which stocks MOVE TOGETHER (4 weeks of "
+             "daily returns), not by any fixed sector list — this is what the big "
+             "money is treating as one trade.</i>\n")
+    for g in gs:
+        arrow = "🟢 BUYING" if g["up"] else "🔴 SELLING"
+        L.append(f"{arrow} — avg <b>{g['avg']:+.1f}%</b> today · "
+                 f"{g['money']:.1f}× normal money")
+        names = []
+        for t in g["members"][:8]:
+            nm = s.name_for(t)
+            names.append(f"{t}")
+        L.append(f"   <b>{' · '.join(names)}</b>")
+        if g["sectors"]:
+            span = ", ".join(g["sectors"][:3])
+            note = (" (one sector)" if len(g["sectors"]) == 1
+                    else " — cuts across sectors")
+            L.append(f"   <i>{span}{note}</i>")
+        L.append("")
+    L.append("<i>A basket spanning several sectors is the useful case: it means "
+             "money is rotating by THEME, which no sector list would have shown "
+             "you.</i>")
+    return "\n".join(L)

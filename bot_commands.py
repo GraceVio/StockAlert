@@ -39,24 +39,30 @@ CHAT_ID = str(os.environ.get("TELEGRAM_CHAT_ID", ""))
 API     = f"https://api.telegram.org/bot{TOKEN}"
 
 HELP = (
-    "🤖 <b>Commands</b>\n"
-    "/mood — 📊 market mood NOW: risk-on/off, hot &amp; cold sectors, movers\n"
-    "/hot — 🔥 where money is moving today (momentum, not dip-buying)\n"
+    "🤖 <b>Commands</b>\n\n"
+    "<b>💰 Where is the money going?</b>\n"
+    "/mood — 📊 market mood NOW: risk-on/off, hot &amp; cold sectors\n"
+    "/hot — 🔥 biggest movers + how much money is behind them\n"
+    "/flow — 🧲 which stocks big money trades as one BASKET\n"
+    "/strong — 🏆 strongest over a window (e.g. <code>/strong 2w</code>)\n"
+    "/sector — 📊 sector strength ranking\n\n"
+    "<b>🎯 What should I buy?</b>\n"
     "/rank — 👑 King Stocks: best DIP-BUY setups right now\n"
-    "/score SYM [SYM …] — 🔎 fit score (0-100) + support, VWAP &amp; size\n"
+    "/score SYM — 🔎 full breakdown: support, trend, room to run, size\n"
     "/find NAME — 🔍 find a ticker by company name\n"
-    "/scan — run the dip-in-uptrend scan now\n"
-    "/sector — 📊 sector strength ranking\n"
+    "/scan — run the dip-in-uptrend scan now\n\n"
+    "<b>📅 What's coming?</b>\n"
     "/earnings — 📅 watchlist earnings, next 7 days\n"
     "/macro — 🏦 CPI/Fed/GDP events + 🔴🟠🟡 impact\n"
-    "/news — 🌍 market news · /news SYM 📰 for one stock\n"
-    "/backtest — 📈 how the strategy performed (~60d)\n"
+    "/news — 🌍 market news · /news SYM 📰 for one stock\n\n"
+    "<b>⚙️ Settings</b>\n"
     "/account — 💼 show/set account size (for position sizing)\n"
-    "/mode — ⏱ fast (hours) or normal (days) target\n"
+    "/mode — ⏱ fast · normal · wide (stop width + target)\n"
     "/watchlist — 📋 show tracked tickers\n"
-    "/add SYM — ➕ add a ticker (e.g. /add NVDA)\n"
-    "/remove SYM — ➖ remove a ticker\n"
+    "/add SYM · /remove SYM — ➕➖ edit the watchlist\n"
+    "/backtest — 📈 how the strategy performed (~60d)\n"
     "/status — 💚 is the bot alive &amp; market regime\n"
+    "/diag — 🔧 check which API keys are detected\n"
     "/help — this message\n\n"
     "<i>Scores rate entry quality now — not price predictions.</i>"
 )
@@ -68,6 +74,8 @@ HELP = (
 COMMAND_MENU = [
     ("mood",      "Market mood now: risk-on/off, hot sectors"),
     ("hot",       "Where money is moving today (momentum)"),
+    ("strong",    "Strongest over 1d/2d/3d/1w/2w/3w/1m"),
+    ("flow",      "Which stocks big money buys as a basket"),
     ("rank",      "King Stocks — best dip-buy setups now"),
     ("score",     "Fit score 0-100 for a stock (e.g. NVDA)"),
     ("find",      "Find a ticker by company name"),
@@ -504,6 +512,12 @@ def handle(text: str):
     if cmd == "/mood":
         import market_mood as mm
         return mm.mood_text()
+    if cmd in ("/flow", "/baskets"):
+        import market_mood as _mm
+        return _mm.flow_text()
+    if cmd in ("/strong", "/strongest"):
+        import market_mood as _mm
+        return _mm.strongest_text(arg or "1w")
     if cmd == "/hot":
         import market_mood as mm
         return mm.hot_text()

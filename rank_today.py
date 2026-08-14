@@ -428,21 +428,34 @@ def _support_line(r) -> str:
     th = r.get("trend_heat") or {}
     sm, mo, wk = th.get("smooth"), th.get("month"), th.get("week")
     rp = th.get("rsi_pct")
-    if sm is not None and mo is not None and abs(sm) > 0.6:
-        span = (f" · week {wk:+.1f}%" if wk is not None else "") + f" · month {mo:+.1f}%"
-        if sm > 0.6 and mo > 0:
+    stc = (th.get("struct") or {})
+    state = stc.get("state")
+    if state in ("uptrend", "stalling", "uptrend_broken", "downtrend"):
+        span = ""
+        parts_ = []
+        for lbl, v in (("1wk", wk), ("2wk", th.get("wk2")),
+                       ("1mo", mo), ("2mo", th.get("mon2"))):
+            if v is not None:
+                parts_.append(f"{lbl} {v:+.1f}%")
+        span = ("\n   " + " · ".join(parts_)) if parts_ else ""
+        if state == "uptrend":
             step = ""
             if rp is not None:
-                if rp < 33:
-                    step = " — <b>and it has stepped back</b> (good spot to join)"
-                elif rp > 70:
-                    step = " — but it's at the top of its range right now (wait for a step back)"
-            bits.append(f"🔥 <b>HOT — steady climb</b>{span}{step}")
-        elif sm < -0.6 and mo < 0:
-            bits.append(f"❄️ <b>COLD — steady slide</b>{span}\n"
-                        "   ⚠️ It has been falling for weeks. If it is green today, "
-                        "that is usually a short bounce before it keeps falling — "
-                        "not the start of a recovery.")
+                step = (" — <b>and it has stepped back</b> (good spot to join)"
+                        if rp < 33 else
+                        (" — but it's at the top of its range (wait for a step back)"
+                         if rp > 70 else ""))
+            bits.append(f"🔥 <b>HOT — uptrend</b> (higher highs &amp; higher lows){span}{step}")
+        elif state == "stalling":
+            bits.append(f"⚠️ <b>Climb losing steam</b> — still higher lows, but it has "
+                        f"stopped making new highs{span}")
+        elif state == "uptrend_broken":
+            bits.append(f"🔻 <b>Uptrend just BROKE</b> — price fell below its last "
+                        f"higher low{span}")
+        else:
+            bits.append(f"❄️ <b>COLD — downtrend</b> (lower highs &amp; lower lows){span}\n"
+                        "   ⚠️ It has been falling for weeks. A green day here is "
+                        "usually a short bounce, not a recovery.")
     up = r.get("upside") or {}
     if up.get("room_r") is not None:
         rr, lvl = up["room_r"], up.get("level")

@@ -662,6 +662,83 @@ def upside_space(daily: pd.DataFrame, price: float, atr_val: float):
             "touches": res["touches"]}
 
 
+def trend_structure(daily: pd.DataFrame, bars: int = 45, k: int = 3, tol: float = 0.005):
+    """TREND BY PRICE STRUCTURE — higher highs + higher lows.
+
+    An uptrend is not "price is higher than a month ago". It is a repeating
+    pattern: push to a new peak, pull back to a HIGHER low than the last dip,
+    then break the old peak — buyers stepping in earlier each time. It also
+    breaks honestly: the moment price makes a LOWER low the uptrend is over,
+    even if the month is still green (the Amazon case: +4% on the month while
+    making lower highs and lower lows for two weeks).
+
+    `tol` ignores tiny wiggles so noise doesn't break a real trend.
+    Returns {state, hh, hl, last_high, last_low, broke_low, note}."""
+    out = {"state": "unclear", "hh": None, "hl": None, "last_high": None,
+           "last_low": None, "broke_low": False, "note": ""}
+    try:
+        d = daily
+        if isinstance(d.columns, pd.MultiIndex):
+            d = d.copy(); d.columns = d.columns.get_level_values(0)
+        d = d.dropna(subset=["High", "Low", "Close"]).tail(bars)
+        if len(d) < 20:
+            return out
+        hs = [p for _, p in _pivot_highs_ts(d["High"], k)]
+        ls = [p for _, p in _pivot_lows_ts(d["Low"], k)]
+        price = float(d["Close"].iloc[-1])
+        # The newest swing high can't be pivot-confirmed (it needs k bars after
+        # it), so fold in the running high of the last stretch.
+        recent_hi = float(d["High"].tail(k + 2).max())
+        if not hs or recent_hi > hs[-1] * (1 + tol):
+            hs = hs + [recent_hi]
+        if len(hs) < 2 or len(ls) < 2:
+            return out
+        # The textbook definition is "a line through TWO or more successive higher
+        # lows". Demanding THREE was stricter than that and labelled obvious
+        # uptrends (NBIS, PLTR — up 28-46% in two weeks) as "sideways". So judge
+        # on the last TWO swings; a third that agrees only CONFIRMS it.
+        hs, ls = hs[-3:], ls[-3:]
+        out["last_high"], out["last_low"] = hs[-1], ls[-1]
+
+        def rising(seq):
+            return seq[-1] > seq[-2] * (1 - tol)
+
+        def falling(seq):
+            return seq[-1] < seq[-2] * (1 + tol)
+
+        hh, hl = rising(hs), rising(ls)
+        lh, ll = falling(hs), falling(ls)
+        out["confirmed"] = bool(
+            hh and hl and len(hs) >= 3 and len(ls) >= 3
+            and hs[-2] > hs[-3] * (1 - tol) and ls[-2] > ls[-3] * (1 - tol))
+        out["hh"], out["hl"] = hh, hl
+        out["broke_low"] = price < ls[-1] * (1 - tol)   # structure just failed
+
+        if hh and hl and not out["broke_low"]:
+            out["state"] = "uptrend"
+            out["note"] = "higher highs and higher lows — buyers in control"
+        elif hh and hl:
+            out["state"] = "uptrend_broken"
+            out["note"] = ("was climbing, but price dropped below its last higher "
+                           "low — the pattern just broke")
+        elif lh and ll:
+            out["state"] = "downtrend"
+            out["note"] = "lower highs and lower lows — sellers in control"
+        elif hl and not hh:
+            out["state"] = "stalling"
+            out["note"] = ("still making higher lows but no new highs — the climb "
+                           "is losing steam")
+        elif lh and not ll:
+            out["state"] = "basing"
+            out["note"] = "lower highs but holding its lows — building a base"
+        else:
+            out["state"] = "sideways"
+            out["note"] = "no clear higher-high / higher-low pattern"
+    except Exception:
+        pass
+    return out
+
+
 def range_position(df: pd.DataFrame):
     """Where the current price sits inside its recent high-low range, 0-100.
     0 = at the lows (a real pullback), 100 = at the highs (chasing).
@@ -1003,12 +1080,16 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
         # 1-week leg feeds the score, because it is the only one that tested
         # positive next to a dip.
         c = ddf["Close"].dropna()
-        th = {"week": None, "month": None, "smooth": None, "rsi_pct": None,
-              "pull_atr": None}
+        th = {"week": None, "wk2": None, "month": None, "mon2": None,
+              "smooth": None, "rsi_pct": None, "pull_atr": None}
         if len(c) > 6:
             th["week"] = (price / float(c.iloc[-6]) - 1) * 100.0
+        if len(c) > 11:
+            th["wk2"] = (price / float(c.iloc[-11]) - 1) * 100.0
         if len(c) > 22:
             th["month"] = (price / float(c.iloc[-22]) - 1) * 100.0
+        if len(c) > 43:
+            th["mon2"] = (price / float(c.iloc[-43]) - 1) * 100.0
         if len(c) > 21:
             y = [float(v) for v in c.iloc[-21:].values]
             n = len(y); xs = list(range(n))
@@ -1037,6 +1118,7 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
                     th["rsi_pct"] = (float(rs_ser.iloc[-1]) - lo) / (hi - lo) * 100.0
         except Exception:
             pass
+        th["struct"] = trend_structure(ddf)
         ctx["trend_heat"] = th
         ctx["support_bonus"] = summ["bonus"]
         ctx["support_tag"] = summ["tag"]
