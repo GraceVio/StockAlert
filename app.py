@@ -49,11 +49,19 @@ try:
 except Exception:
     _pw = None
 if _pw:
+    # Nothing below renders until the password matches — no data, no tickers.
+    # The password itself lives in Streamlit Secrets, which is NOT part of the
+    # public repo, so this is a real gate even though the code is public.
     if not st.session_state.get("ok"):
         st.title("👑 StockAlert")
-        if st.text_input("Password", type="password") == _pw:
-            st.session_state["ok"] = True
-            st.rerun()
+        st.caption("Private dashboard — enter the password to continue.")
+        entered = st.text_input("Password", type="password")
+        if entered:
+            if entered == _pw:
+                st.session_state["ok"] = True
+                st.rerun()
+            else:
+                st.error("Wrong password.")
         st.stop()
 
 
@@ -78,6 +86,24 @@ def colour(v):
         return ""
     return "color:#16a34a;font-weight:600" if v > 0 else (
         "color:#dc2626;font-weight:600" if v < 0 else "")
+
+
+def score_colour(v):
+    """Green→amber→red band for the 0-100 score. Written by hand instead of
+    pandas' background_gradient, which pulls in matplotlib — not installed on
+    Streamlit Cloud, and not worth adding a plotting library just to tint a
+    column."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return ""
+    if v >= 65:
+        return "background-color:#16a34a;color:white;font-weight:700"
+    if v >= 55:
+        return "background-color:#65a30d;color:white;font-weight:600"
+    if v >= 45:
+        return "background-color:#ca8a04;color:white"
+    return "background-color:#6b7280;color:white"
 
 
 # ------------------------------------------------------------------ header
@@ -215,7 +241,7 @@ with tabs[4]:
         "Sector": (r.get("sector") or {}).get("name", "") if isinstance(r.get("sector"), dict) else "",
     } for r in rrows])
     st.dataframe(
-        rdf.style.background_gradient(subset=["Score"], cmap="RdYlGn", vmin=20, vmax=80)
+        rdf.style.map(score_colour, subset=["Score"])
            .format({"Price": "{:.2f}", "RSI": "{:.0f}", "Room": "{:.1f}R",
                     "In range %": "{:.0f}%"}, na_rep="—"),
         use_container_width=True, hide_index=True, height=560)
