@@ -89,7 +89,9 @@ st.markdown(f"""<style>
   /* Compact session banner — the colour already does the shouting. */
   .sess {{ padding: .35rem .7rem; border-radius: 8px; font-size: .9rem;
            background: rgba(56,139,253,.14); border: 1px solid rgba(56,139,253,.35);
-           margin: .1rem 0 .5rem; display: inline-block; }}
+           margin: .1rem 0 .9rem; display: inline-block; }}
+  /* Breathing room around the Sectors/Baskets pills. */
+  div[data-testid="stButtonGroup"] {{ margin: .55rem 0 .7rem; }}
   /* ---- Basket cards -------------------------------------------------
      Spacing rules: generous OUTSIDE the card and between its three blocks,
      TIGHT between the wrapped ticker lines. Each ticker+name is one atom that
@@ -157,7 +159,8 @@ def colour(v):
         "color:#dc2626;font-weight:600" if v < 0 else "")
 
 
-def show_table(df, numeric, index_col="Ticker", height=560, extra=None):
+def show_table(df, numeric, index_col="Ticker", height=560, extra=None,
+               fmt=None, select_key=None):
     """One table style for the whole app.
 
     * Ticker becomes the INDEX — Streamlit keeps the index column PINNED while
@@ -173,17 +176,71 @@ def show_table(df, numeric, index_col="Ticker", height=560, extra=None):
             d[c] = pd.to_numeric(d[c], errors="coerce").round(1)
     if index_col in d.columns:
         d = d.set_index(index_col)
+    # Columns that aren't percentages still need a format, or pandas prints the
+    # full float (0.200000 instead of 0.2×).
+    spec = {c: "{:+.1f}%" for c in numeric if c in d.columns}
+    for c, f in (fmt or {}).items():
+        if c in d.columns:
+            d[c] = pd.to_numeric(d[c], errors="coerce")
+            spec[c] = f
     sty = d.style.map(colour, subset=[c for c in numeric if c in d.columns])
     if extra:
         sty = extra(sty)
-    st.dataframe(sty.format({c: "{:+.1f}%" for c in numeric if c in d.columns},
-                            na_rep="—"),
-                 use_container_width=True, height=height)
+    styled = sty.format(spec, na_rep="—")
+    if select_key:
+        ev = st.dataframe(styled, use_container_width=True, height=height,
+                          on_select="rerun", selection_mode="single-row",
+                          key=select_key)
+        picked = list(getattr(ev, "selection", {}).get("rows", []) or [])
+        return d.index[picked[0]] if picked else None
+    st.dataframe(styled, use_container_width=True, height=height)
+    return None
 
 
 STATE_LBL = {"uptrend": "🪜 uptrend", "stalling": "⚠️ losing steam",
              "uptrend_broken": "🔻 uptrend broke", "downtrend": "❄️ downtrend",
              "basing": "〰️ basing", "sideways": "〰️ sideways"}
+
+
+
+# ------------------------------------------------------- permanent watchlist
+# Streamlit Cloud's filesystem is REBUILT from GitHub on every restart, so a
+# local write only survives the session. Committing through the GitHub API makes
+# an edit permanent AND keeps the Telegram bot in sync, since both read the same
+# watchlist.txt from the repo.
+def gh_config():
+    try:
+        tok = st.secrets.get("GITHUB_TOKEN")
+        repo = st.secrets.get("GITHUB_REPO")
+    except Exception:
+        tok = repo = None
+    return (tok, repo) if tok and repo else (None, None)
+
+
+def gh_save_watchlist(tickers, message):
+    """Commit watchlist.txt to GitHub. Returns (ok, detail)."""
+    import base64
+    import requests
+    tok, repo = gh_config()
+    if not tok:
+        return False, "no GITHUB_TOKEN / GITHUB_REPO secret"
+    url = f"https://api.github.com/repos/{repo}/contents/watchlist.txt"
+    hdr = {"Authorization": f"Bearer {tok}",
+           "Accept": "application/vnd.github+json"}
+    try:
+        cur = requests.get(url, headers=hdr, timeout=20)
+        sha = cur.json().get("sha") if cur.status_code == 200 else None
+        body = ("\n".join(tickers) + "\n").encode("utf-8")
+        payload = {"message": message,
+                   "content": base64.b64encode(body).decode("ascii")}
+        if sha:
+            payload["sha"] = sha
+        r = requests.put(url, headers=hdr, json=payload, timeout=20)
+        if r.status_code in (200, 201):
+            return True, "committed to GitHub"
+        return False, f"GitHub said {r.status_code}: {r.json().get('message','')}"
+    except Exception as e:
+        return False, str(e)
 
 
 def s_name(t):
@@ -271,16 +328,15 @@ if _map == "🌡️ Sectors":
         "1wk %": r["1w"], "2wk %": r["2w"], "1mo %": r["1m"],
         "Trend": "🟢 up" if r["strong"] else "🔴 weak",
     } for r in sm])
-    show_table(secdf, ["4h %", "Today %", "1wk %", "2wk %", "1mo %"],
-               index_col="Sector", height=430)
-    st.caption("Top of the list = money flowing in RIGHT NOW. 4h says whether "
-               "today's move is still building or already fading. Trend = the "
-               "sector ETF vs its own 50-day line.")
+    # Click a sector row to open it — no separate dropdown needed.
+    pick = show_table(secdf, ["4h %", "Today %", "1wk %", "2wk %", "1mo %"],
+                      index_col="Sector", height=430, select_key="sectorpick")
+    st.caption("👆 Tap a sector to see the stocks driving it. "
+               "Trend = the sector ETF vs its own 50-day line.")
 
-    pick = st.selectbox("Open a sector to see what's driving it",
-                        [r["name"] for r in sm], index=0, key="secpick")
     if pick:
-        mem = mm.sector_members(snap, pick, n=5)
+        n_show = st.slider("Stocks to show", 3, 10, 5, 1, key="secn")
+        mem = mm.sector_members(snap, pick, n=n_show)
         if not mem:
             st.info(f"No {pick} stocks in the scanned universe yet.")
         else:
@@ -288,7 +344,7 @@ if _map == "🌡️ Sectors":
             st.markdown(
                 f"<div class='sechd'>{pick} · today "
                 f"{(row.get('1d') or 0):+.2f}% · 1wk {(row.get('1w') or 0):+.1f}%"
-                f"</div>", unsafe_allow_html=True)
+                f" · {len(mem)} strongest</div>", unsafe_allow_html=True)
             mdf = pd.DataFrame([{
                 "Ticker": r["ticker"], "Name": s.name_for(r["ticker"]) or "",
                 "Today %": r["day"], "Money×": r.get("money"),
@@ -297,12 +353,12 @@ if _map == "🌡️ Sectors":
                 "1mo %": (r.get("spans") or {}).get("1m"),
                 "Trend": STATE_LBL.get((r.get("struct") or {}).get("state"), ""),
             } for r in mem])
-            for _c in ("Money×", "RVOL"):
-                mdf[_c] = pd.to_numeric(mdf[_c], errors="coerce").round(1)
-            show_table(mdf, ["Today %", "1wk %", "1mo %"], height=245)
-            st.caption("Ranked by PULL — the move weighted by how much money is "
-                       "behind it. A 5% pop on thin volume shifts a sector far "
-                       "less than a 2% push on 3× normal money.")
+            show_table(mdf, ["Today %", "1wk %", "1mo %"],
+                       height=60 + 38 * len(mdf),
+                       fmt={"Money×": "{:.1f}×", "RVOL": "{:.1f}×"})
+            st.caption("Ranked by PULL — the move weighted by the money behind "
+                       "it. A 5% pop on thin volume shifts a sector far less "
+                       "than a 2% push on 3× normal money.")
 
 if _map == "🧲 Baskets":
     st.subheader("What big money is trading as one basket")
@@ -366,9 +422,8 @@ with tabs[0]:
         "Trend": STATE.get((r.get("struct") or {}).get("state"), ""),
         "Sector": r.get("sector") or "",
     } for r in hot])
-    for _c in ("Money×", "RVOL"):
-        hdf[_c] = pd.to_numeric(hdf[_c], errors="coerce").round(1)
-    show_table(hdf, ["Today %", "Off low %", "1wk %", "2wk %", "1mo %"])
+    show_table(hdf, ["Today %", "Off low %", "1wk %", "2wk %", "1mo %"],
+               fmt={"Money×": "{:.1f}×", "RVOL": "{:.1f}×"})
     st.caption("**Money×** = *euros* traded today vs this stock's own normal. "
                "**RVOL** = *shares* traded vs normal. They usually agree; Money× "
                "is the better one because it counts the actual capital committed. Above "
@@ -474,6 +529,23 @@ with tabs[4]:
     wl = [t for t in s.load_watchlist()]
     st.caption(f"{len(wl)} tickers. SPY and QQQ are kept as market context.")
 
+    _tok, _repo = gh_config()
+
+    def _persist(new_list, msg):
+        """Write locally (instant) and commit to GitHub (permanent)."""
+        with open(s.WATCHLIST_FILE, "w", encoding="utf-8") as f:
+            f.write("\n".join(new_list) + "\n")
+        st.cache_data.clear()
+        if _tok:
+            ok, detail = gh_save_watchlist(new_list, msg)
+            if ok:
+                st.success(f"{msg} — saved permanently ({_repo}).")
+            else:
+                st.warning(f"{msg} — saved for this session only ({detail}).")
+        else:
+            st.info(f"{msg} — this session only. Add GITHUB_TOKEN + GITHUB_REPO "
+                    "secrets to make edits permanent.")
+
     c_add, c_del = st.columns(2)
     with c_add:
         new = st.text_input("Add ticker", placeholder="NVDA  ·  SAP.DE  ·  TTE.PA",
@@ -492,27 +564,26 @@ with tabs[4]:
                     st.error(f"{sym} — no Yahoo data. EU names need a suffix "
                              "(.DE .AS .PA .L .F).")
                 else:
-                    with open(s.WATCHLIST_FILE, "a", encoding="utf-8") as f:
-                        f.write(sym + "\n")
-                    st.cache_data.clear()
-                    st.success(f"Added {sym}.")
+                    _persist(wl + [sym], f"Add {sym} to watchlist")
                     st.rerun()
     with c_del:
         rm = st.multiselect("Remove tickers",
                             [t for t in wl if t not in ("SPY", "QQQ")],
                             key="wl_rm")
         if st.button("➖ Remove selected", key="wl_rm_btn") and rm:
-            kept = [t for t in wl if t not in rm]
-            with open(s.WATCHLIST_FILE, "w", encoding="utf-8") as f:
-                f.write("\n".join(kept) + "\n")
-            st.cache_data.clear()
-            st.success(f"Removed {', '.join(rm)}.")
+            _persist([t for t in wl if t not in rm],
+                     f"Remove {', '.join(rm)} from watchlist")
             st.rerun()
 
-    st.warning("⚠️ On Streamlit Cloud these edits last for this session only — "
-               "the server rebuilds from GitHub and resets the file. For a "
-               "permanent change use **/add** or **/remove** in Telegram, which "
-               "commits it to the repo.", icon="⚠️")
+    if _tok:
+        st.caption(f"✅ Edits are committed to **{_repo}** — permanent, and the "
+                   "Telegram bot picks them up on its next run.")
+    else:
+        st.warning("Edits here last for this session only. To make them "
+                   "permanent, add two Streamlit secrets — `GITHUB_TOKEN` (a "
+                   "GitHub token with repo access) and `GITHUB_REPO` "
+                   "(e.g. \"GraceVio/StockAlert\") — or use /add and /remove "
+                   "in Telegram.")
 
     group = st.toggle("Group by sector", value=True, key="wl_group")
     wdf = pd.DataFrame([{"Ticker": t, "Name": s.name_for(t) or "",
