@@ -638,3 +638,96 @@ def flow_text(snap=None):
              "money is rotating by THEME, which no sector list would have shown "
              "you.</i>")
     return "\n".join(L)
+
+
+# ------------------------------------------------------------ sector detail
+SECTOR_SPANS = [("4h", "4 hours"), ("1d", "today"), ("1w", "1 week"),
+                ("2w", "2 weeks"), ("1m", "1 month")]
+_sector_multi_cache = {"data": None, "at": None}
+
+
+def sector_multi(max_age_s=300):
+    """Every sector across several horizons: 4h · today · 1w · 2w · 1m.
+
+    'today' is measured from the previous session's close (pre/post-market
+    included), matching how the rest of the dashboard defines a day. 4h comes
+    from hourly bars so it still says something while a session is running.
+    """
+    now = dt.datetime.now(dt.timezone.utc)
+    c = _sector_multi_cache
+    if c["data"] and c["at"] and (now - c["at"]).total_seconds() < max_age_s:
+        return c["data"]
+
+    etfs = list(s.SECTOR_ETFS.items())
+    syms = [e for _, e in etfs]
+    try:
+        h = yf.download(syms, period="7d", interval="60m", progress=False,
+                        auto_adjust=False, prepost=True, group_by="ticker",
+                        threads=True)
+    except Exception:
+        h = None
+    try:
+        d = yf.download(syms, period="3mo", interval="1d", progress=False,
+                        auto_adjust=False, group_by="ticker", threads=True)
+    except Exception:
+        d = None
+
+    strength = s.get_sector_strength()
+    out = []
+    for name, etf in etfs:
+        row = {"name": name, "etf": etf, "4h": None, "1d": None,
+               "1w": None, "2w": None, "1m": None,
+               "strong": strength.get(name, {}).get("strong")}
+        dc = None
+        try:
+            dd = d[etf]
+            if isinstance(dd.columns, pd.MultiIndex):
+                dd.columns = dd.columns.get_level_values(0)
+            dc = dd["Close"].dropna()
+        except Exception:
+            dc = None
+        last = None
+        try:
+            hc = h[etf]
+            if isinstance(hc.columns, pd.MultiIndex):
+                hc.columns = hc.columns.get_level_values(0)
+            hc = hc["Close"].dropna()
+            if len(hc):
+                last = float(hc.iloc[-1])
+            if len(hc) > 4:
+                row["4h"] = (float(hc.iloc[-1]) / float(hc.iloc[-5]) - 1) * 100
+        except Exception:
+            pass
+        if dc is not None and len(dc) > 1:
+            px = last if last else float(dc.iloc[-1])
+            try:
+                today_ny = dt.datetime.now(ZoneInfo("America/New_York")).date()
+                bar_today = dc.index[-1].date() == today_ny
+            except Exception:
+                bar_today = False
+            prev = float(dc.iloc[-2]) if (bar_today and len(dc) > 1) else float(dc.iloc[-1])
+            row["1d"] = (px / prev - 1) * 100
+            base = 0 if bar_today else 1
+            for key, n in (("1w", 5), ("2w", 10), ("1m", 21)):
+                i = n + base
+                if len(dc) > i:
+                    row[key] = (px / float(dc.iloc[-i]) - 1) * 100
+        out.append(row)
+    out.sort(key=lambda r: (r["1d"] is None, -(r["1d"] or 0)))
+    _sector_multi_cache.update({"data": out, "at": now})
+    return out
+
+
+def sector_members(snap, sector, n=5):
+    """The stocks doing the most to MOVE a sector today — not just the biggest
+    percentage, but the ones carrying real volume behind it, since a 5% pop on
+    a fifth of normal volume moves an index far less than a 2% push on 3x."""
+    rows = [r for r in (snap or {}).get("rows", [])
+            if (r.get("sector") or "") == sector and r.get("day") is not None]
+    if not rows:
+        return []
+    for r in rows:
+        r["_pull"] = (r["day"] or 0) * max(0.4, min(3.0, r.get("money") or 1.0))
+    up = sum(1 for r in rows if (r["day"] or 0) > 0) >= len(rows) / 2
+    rows.sort(key=lambda r: r["_pull"], reverse=up)
+    return rows[:n]

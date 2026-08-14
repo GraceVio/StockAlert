@@ -5,4 +5,4 @@ requests>=2.31
 lxml>=4.9          # needed by yfinance for earnings dates (/earnings, earnings-VWAP)
 # Dashboard (app.py). Streamlit Cloud reads this file; the
 # GitHub Actions bot installs it too but never imports it.
-streamlit>=1.30
+streamlit>=1.40   # st.pills needs 1.40+

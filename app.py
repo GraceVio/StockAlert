@@ -90,32 +90,26 @@ st.markdown(f"""<style>
   .sess {{ padding: .35rem .7rem; border-radius: 8px; font-size: .9rem;
            background: rgba(56,139,253,.14); border: 1px solid rgba(56,139,253,.35);
            margin: .1rem 0 .5rem; display: inline-block; }}
-  /* Basket cards — each block needs its own breathing room, otherwise the
-     wrapped ticker list collides with the sector line underneath. */
-  .bk {{ display: flex; flex-wrap: wrap; align-items: baseline; gap: .45rem;
-         margin: 0 0 .5rem 0; padding-bottom: .45rem;
-         border-bottom: 1px solid rgba(128,128,128,.18); }}
-  .bk .big {{ font-size: 1.25rem; font-weight: 700; }}
-  .bk .tag {{ font-size: .9rem; font-weight: 700; letter-spacing: .03em; }}
-  .bk .mny {{ font-size: .88rem; opacity: .75; }}
-  .bkn {{ font-size: .98rem; line-height: 1.7; margin: 0 0 .55rem 0; }}
-  .bkn .tk {{ font-weight: 700; }}
-  .bkn .nm {{ opacity: .78; }}
-  .bks {{ font-size: .82rem; opacity: .65; margin: 0; }}
-  /* Market-map buttons: text-width, side by side, SUBTLE active state. */
-  .maprow div[data-testid="stHorizontalBlock"] {{ flex-wrap: nowrap !important;
-      gap: .4rem; }}
-  .maprow div[data-testid="column"] {{ flex: 0 0 auto !important;
-      width: auto !important; min-width: 0 !important; }}
-  .maprow .stButton > button {{ padding: .18rem .7rem; font-size: .92rem;
-      border-radius: 999px; width: auto; min-height: 0; }}
-  .maprow .stButton > button[kind="primary"] {{
-      background: transparent !important; color: inherit !important;
-      border: 1px solid rgba(128,128,128,.75) !important;
-      box-shadow: inset 0 -2px 0 0 rgba(120,160,255,.9) !important;
-      font-weight: 700; }}
-  .maprow .stButton > button[kind="secondary"] {{
-      border: 1px solid rgba(128,128,128,.3) !important; opacity: .85; }}
+  /* ---- Basket cards -------------------------------------------------
+     Spacing rules: generous OUTSIDE the card and between its three blocks,
+     TIGHT between the wrapped ticker lines. Each ticker+name is one atom that
+     never splits across a line break. */
+  .card {{ border: 1px solid rgba(128,128,128,.28); border-radius: 12px;
+           padding: .8rem .9rem .85rem; margin: 0 0 .9rem 0; }}
+  .card .crow {{ display: flex; flex-wrap: wrap; align-items: baseline;
+                 gap: .5rem; margin-bottom: .6rem; }}
+  .card .tag {{ font-size: .88rem; font-weight: 700; letter-spacing: .04em; }}
+  .card .big {{ font-size: 1.3rem; font-weight: 700; line-height: 1; }}
+  .card .sub {{ font-size: .86rem; opacity: .7; }}
+  .card .names {{ display: flex; flex-wrap: wrap; gap: .2rem .9rem;
+                  font-size: .95rem; line-height: 1.35; margin-bottom: .6rem; }}
+  .card .pair {{ white-space: nowrap; }}
+  .card .nm {{ opacity: .65; }}
+  .card .foot {{ font-size: .8rem; opacity: .6;
+                 padding-top: .5rem;
+                 border-top: 1px solid rgba(128,128,128,.16); }}
+  /* Sector drill-down */
+  .sechd {{ font-size: 1.05rem; font-weight: 700; margin: .2rem 0 .4rem; }}
 </style>""", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------- password
@@ -187,6 +181,15 @@ def show_table(df, numeric, index_col="Ticker", height=560, extra=None):
                  use_container_width=True, height=height)
 
 
+STATE_LBL = {"uptrend": "🪜 uptrend", "stalling": "⚠️ losing steam",
+             "uptrend_broken": "🔻 uptrend broke", "downtrend": "❄️ downtrend",
+             "basing": "〰️ basing", "sideways": "〰️ sideways"}
+
+
+def s_name(t):
+    return s.name_for(t) or ""
+
+
 def score_colour(v):
     """Green→amber→red band for the 0-100 score. Written by hand instead of
     pandas' background_gradient, which pulls in matplotlib — not installed on
@@ -253,38 +256,55 @@ st.markdown("<div class='hdr'>" + "".join(bits) + "</div>", unsafe_allow_html=Tr
 # Sectors and Baskets answer "where is money going" — context you glance at
 # before picking anything. They sit in their own row so the tab bar below stays
 # purely about choosing a stock.
-# Hidden by default; each button toggles its own panel (click again = close).
-if "map" not in st.session_state:
-    st.session_state["map"] = None
-st.markdown('<div class="maprow">', unsafe_allow_html=True)
-_b1, _b2, _sp = st.columns([1, 1, 6])
-if _b1.button("🌡️ Sectors",
-              type="primary" if st.session_state["map"] == "sec" else "secondary"):
-    st.session_state["map"] = None if st.session_state["map"] == "sec" else "sec"
-    st.rerun()
-if _b2.button("🧲 Baskets",
-              type="primary" if st.session_state["map"] == "bkt" else "secondary"):
-    st.session_state["map"] = None if st.session_state["map"] == "bkt" else "bkt"
-    st.rerun()
-st.markdown('</div>', unsafe_allow_html=True)
-_map = st.session_state["map"]
+# Hidden by default. st.pills gives small side-by-side pills with a SUBTLE
+# selected state and clears when you tap the active one again.
+_map = st.pills("Market map", ["🌡️ Sectors", "🧲 Baskets"],
+                selection_mode="single", default=None,
+                label_visibility="collapsed")
 
 # ------------------------------------------------------------- 1. sectors
-if _map == "sec":
-    st.subheader("Where money is rotating today")
-    sec = snap.get("sectors") or []
-    if sec:
-        sdf = pd.DataFrame(sec, columns=["Sector", "Today %"])
-        strength = s.get_sector_strength()
-        sdf["1 month %"] = [strength.get(n, {}).get("month") for n in sdf["Sector"]]
-        sdf["Trend"] = ["🟢 up" if strength.get(n, {}).get("strong") else "🔴 weak"
-                        for n in sdf["Sector"]]
-        show_table(sdf, ["Today %", "1 month %"], index_col="Sector", height=420)
-        st.caption("🔥 top of this list = where money is flowing in RIGHT NOW. "
-                   "Sector rotation drives most of a stock's daily move.")
+if _map == "🌡️ Sectors":
+    st.subheader("Where money is rotating")
+    sm = mm.sector_multi()
+    secdf = pd.DataFrame([{
+        "Sector": r["name"], "4h %": r["4h"], "Today %": r["1d"],
+        "1wk %": r["1w"], "2wk %": r["2w"], "1mo %": r["1m"],
+        "Trend": "🟢 up" if r["strong"] else "🔴 weak",
+    } for r in sm])
+    show_table(secdf, ["4h %", "Today %", "1wk %", "2wk %", "1mo %"],
+               index_col="Sector", height=430)
+    st.caption("Top of the list = money flowing in RIGHT NOW. 4h says whether "
+               "today's move is still building or already fading. Trend = the "
+               "sector ETF vs its own 50-day line.")
 
-# -------------------------------------------------------------- 3. baskets
-if _map == "bkt":
+    pick = st.selectbox("Open a sector to see what's driving it",
+                        [r["name"] for r in sm], index=0, key="secpick")
+    if pick:
+        mem = mm.sector_members(snap, pick, n=5)
+        if not mem:
+            st.info(f"No {pick} stocks in the scanned universe yet.")
+        else:
+            row = next((r for r in sm if r["name"] == pick), {})
+            st.markdown(
+                f"<div class='sechd'>{pick} · today "
+                f"{(row.get('1d') or 0):+.2f}% · 1wk {(row.get('1w') or 0):+.1f}%"
+                f"</div>", unsafe_allow_html=True)
+            mdf = pd.DataFrame([{
+                "Ticker": r["ticker"], "Name": s.name_for(r["ticker"]) or "",
+                "Today %": r["day"], "Money×": r.get("money"),
+                "RVOL": r.get("rvol"),
+                "1wk %": (r.get("spans") or {}).get("1w"),
+                "1mo %": (r.get("spans") or {}).get("1m"),
+                "Trend": STATE_LBL.get((r.get("struct") or {}).get("state"), ""),
+            } for r in mem])
+            for _c in ("Money×", "RVOL"):
+                mdf[_c] = pd.to_numeric(mdf[_c], errors="coerce").round(1)
+            show_table(mdf, ["Today %", "1wk %", "1mo %"], height=245)
+            st.caption("Ranked by PULL — the move weighted by how much money is "
+                       "behind it. A 5% pop on thin volume shifts a sector far "
+                       "less than a 2% push on 3× normal money.")
+
+if _map == "🧲 Baskets":
     st.subheader("What big money is trading as one basket")
     st.caption("Found by measuring which stocks MOVE TOGETHER (4 weeks of daily "
                "returns) — not from any fixed sector list. A basket spanning "
@@ -294,28 +314,24 @@ if _map == "bkt":
         st.info("No clear baskets right now — today's moves look stock-specific "
                 "rather than a coordinated rotation. (Quiet before the US open.)")
     for g in groups:
-        tag = "🟢 BUYING" if g["up"] else "🔴 SELLING"
+        tag = "BUYING" if g["up"] else "SELLING"
+        dot = "🟢" if g["up"] else "🔴"
         col = "#16a34a" if g["up"] else "#dc2626"
-        with st.container(border=True):
-            # One line: what · how much · how much money. The metric widget made
-            # the % enormous and pushed everything onto separate rows.
-            st.markdown(
-                f"<div class='bk'><span class='tag' style='color:{col}'>{tag}</span>"
-                f"<span class='big' style='color:{col}'>{g['avg']:+.1f}%</span>"
-                f"<span class='mny'>· {g['money']:.1f}× money · "
-                f"{len(g['members'])} stocks</span></div>",
-                unsafe_allow_html=True)
-            names = " &nbsp;·&nbsp; ".join(
-                f"<span class='tk'>{t}</span>"
-                + (f" <span class='nm'>{s.name_for(t)}</span>"
-                   if s.name_for(t) else "")
-                for t in g["members"][:12])
-            st.markdown(f"<div class='bkn'>{names}</div>", unsafe_allow_html=True)
-            spread = ", ".join(g["sectors"][:3])
-            note = (" — cuts across sectors" if len(g["sectors"]) > 1
-                    else " (one sector)")
-            st.markdown(f"<div class='bks'>{spread}{note}</div>",
-                        unsafe_allow_html=True)
+        names = "".join(
+            f"<span class='pair'><b>{t}</b>&nbsp;<span class='nm'>"
+            f"{s_name(t)}</span></span>" for t in g["members"][:12])
+        spread = ", ".join(g["sectors"][:3])
+        note = ("cuts across sectors" if len(g["sectors"]) > 1 else "one sector")
+        st.markdown(
+            f"""<div class='card'>
+                 <div class='crow'>
+                   <span class='tag' style='color:{col}'>{dot} {tag}</span>
+                   <span class='big' style='color:{col}'>{g['avg']:+.1f}%</span>
+                   <span class='sub'>{g['money']:.1f}× money · {len(g['members'])} stocks</span>
+                 </div>
+                 <div class='names'>{names}</div>
+                 <div class='foot'>{spread} — {note}</div>
+               </div>""", unsafe_allow_html=True)
     if groups:
         movers = sum(1 for r in rows if abs(r.get("day") or 0) >= 1.0)
         note = ("Only groups of 3+ stocks that move together AND are moving the "
@@ -329,7 +345,8 @@ if _map == "bkt":
         st.caption(note)
 
 st.divider()
-tabs = st.tabs(["🔥 Hot money", "🏆 Strongest", "👑 Dip ranking", "🔎 Stock"])
+tabs = st.tabs(["🔥 Hot money", "🏆 Strongest", "👑 Dip ranking", "🔎 Stock",
+                "📋 Watchlist"])
 
 # ----------------------------------------------------------- 2. hot money
 with tabs[0]:
@@ -338,9 +355,7 @@ with tabs[0]:
                "and sector — not just today's %. That is what makes it different "
                "from Strongest 1d, which sorts purely on the move.")
     hot = mm.hot_ranked(snap)[:20]
-    STATE = {"uptrend": "🪜 uptrend", "stalling": "⚠️ losing steam",
-             "uptrend_broken": "🔻 uptrend broke", "downtrend": "❄️ downtrend",
-             "basing": "〰️ basing", "sideways": "〰️ sideways"}
+    STATE = STATE_LBL
     hdf = pd.DataFrame([{
         "Ticker": r["ticker"], "Name": s.name_for(r["ticker"]) or "",
         "Today %": r["day"], "Money×": r.get("money"), "RVOL": r.get("rvol"),
@@ -451,6 +466,66 @@ with tabs[3]:
                                             use_container_width=True):
                 st.session_state["quick_sym"] = tk
                 st.rerun()
+
+
+# --------------------------------------------------------------- 7. watchlist
+with tabs[4]:
+    st.subheader("Your watchlist")
+    wl = [t for t in s.load_watchlist()]
+    st.caption(f"{len(wl)} tickers. SPY and QQQ are kept as market context.")
+
+    c_add, c_del = st.columns(2)
+    with c_add:
+        new = st.text_input("Add ticker", placeholder="NVDA  ·  SAP.DE  ·  TTE.PA",
+                            key="wl_add")
+        if st.button("➕ Add", key="wl_add_btn") and new.strip():
+            sym = new.strip().upper()
+            if sym in wl:
+                st.warning(f"{sym} is already on the list.")
+            else:
+                try:
+                    ok = not s.yf.download(sym, period="5d", interval="1d",
+                                           progress=False).empty
+                except Exception:
+                    ok = False
+                if not ok:
+                    st.error(f"{sym} — no Yahoo data. EU names need a suffix "
+                             "(.DE .AS .PA .L .F).")
+                else:
+                    with open(s.WATCHLIST_FILE, "a", encoding="utf-8") as f:
+                        f.write(sym + "\n")
+                    st.cache_data.clear()
+                    st.success(f"Added {sym}.")
+                    st.rerun()
+    with c_del:
+        rm = st.multiselect("Remove tickers",
+                            [t for t in wl if t not in ("SPY", "QQQ")],
+                            key="wl_rm")
+        if st.button("➖ Remove selected", key="wl_rm_btn") and rm:
+            kept = [t for t in wl if t not in rm]
+            with open(s.WATCHLIST_FILE, "w", encoding="utf-8") as f:
+                f.write("\n".join(kept) + "\n")
+            st.cache_data.clear()
+            st.success(f"Removed {', '.join(rm)}.")
+            st.rerun()
+
+    st.warning("⚠️ On Streamlit Cloud these edits last for this session only — "
+               "the server rebuilds from GitHub and resets the file. For a "
+               "permanent change use **/add** or **/remove** in Telegram, which "
+               "commits it to the repo.", icon="⚠️")
+
+    group = st.toggle("Group by sector", value=True, key="wl_group")
+    wdf = pd.DataFrame([{"Ticker": t, "Name": s.name_for(t) or "",
+                         "Sector": s.SECTOR_MAP.get(t, "—")} for t in wl])
+    if group:
+        wdf = wdf.sort_values(["Sector", "Ticker"], kind="stable")
+        for sec_name, chunk in wdf.groupby("Sector", sort=False):
+            with st.expander(f"{sec_name}  ·  {len(chunk)}", expanded=False):
+                st.dataframe(chunk[["Ticker", "Name"]].set_index("Ticker"),
+                             use_container_width=True)
+    else:
+        st.dataframe(wdf.sort_values("Ticker").set_index("Ticker"),
+                     use_container_width=True, height=560)
 
 st.divider()
 st.caption("Scores rate ENTRY QUALITY right now — they are not price predictions. "
