@@ -193,10 +193,12 @@ def show_table(df, numeric, index_col="Ticker", height=None, extra=None,
     # Fixed column widths: without them Streamlit re-flows the columns as you
     # scroll sideways, so they appear to jump. Only the index (Ticker/Sector)
     # stays pinned; everything else keeps its slot.
+    # No explicit width -> each column sizes to fit its own content (no wasted
+    # space). Column ORDER still comes from the DataFrame's column order, which
+    # pandas never reshuffles on scroll, so this doesn't bring back the
+    # jumping — it only stops columns being forced wider than they need.
     kw = {"use_container_width": True,
-          "column_config": {c: st.column_config.Column(
-              width="medium" if c in ("Name", "Support", "Trend") else "small")
-              for c in d.columns}}
+          "column_config": {c: st.column_config.Column() for c in d.columns}}
     if height is not None:
         kw["height"] = height
     if select_key:
@@ -452,15 +454,28 @@ with tabs[1]:
     extras = [k for k in ("1d", "1w", "2w", "1m") if k != win]
     labels = {"1d": "1d %", "2d": "2d %", "3d": "3d %", "1w": "1wk %",
               "2w": "2wk %", "3w": "3wk %", "1m": "1mo %"}
+    # 1d Gain is measured from yesterday's 4pm ET close (spans["1d"]). Since Open
+    # is a SEPARATE number, measured from today's 9:30 ET open — only meaningful
+    # on the 1d window, so it's only added there.
     numcols = [f"▶ {labels[win]}"] + [labels[k] for k in extras]
+    if win == "1d":
+        numcols.append("Since Open %")
     sdf2 = pd.DataFrame([dict(
         [("Ticker", r["ticker"]), ("Name", s.name_for(r["ticker"]) or ""),
          (f"▶ {labels[win]}", r["spans"][win])]
         + [(labels[k], (r.get("spans") or {}).get(k)) for k in extras]
-        + [("Trend", STATE.get((r.get("struct") or {}).get("state"), "")),
+        + ([("Since Open %", r.get("intraday_pct"))] if win == "1d" else [])
+        + [("×ATR", r.get("move_atr")),
+           ("Intraday", ("🟢 holding" if r.get("holding")
+                         else ("🔴 fading" if r.get("holding") is False else "—"))),
+           ("Trend", STATE.get((r.get("struct") or {}).get("state"), "")),
            ("Sector", r.get("sector") or "")]
     ) for r in sel[:20]])
     show_table(sdf2, numcols, fmt={"×ATR": "{:+.1f}×"})
+    if win == "1d":
+        st.caption(f"**▶ {labels[win]}** = 1d Gain, from yesterday's US close "
+                   "(4:00 PM ET). **Since Open %** = Intraday Gain, from today's "
+                   "US open (9:30 AM ET) only.")
     st.caption("**×ATR** = the move measured against this stock's own 14-day "
                "average range — above ~2× is a statistically real breakout, not "
                "noise. **Intraday**: 🟢 price is above today's open (buyers still "

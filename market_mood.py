@@ -213,7 +213,7 @@ def snapshot(universe=None):
             # And a stock can gap +25% then be sold all day to +12%: still "up"
             # against yesterday, but being distributed. Comparing price to TODAY'S
             # OPEN separates "up and holding" from "up but fading".
-            atr_pct = move_atr = open_pct = None
+            atr_pct = move_atr = open_pct = intraday_pct = None
             holding = None
             try:
                 tr = ((d["High"] - d["Low"]) / d["Close"] * 100).tail(14)
@@ -226,8 +226,12 @@ def snapshot(universe=None):
                 if bar_is_today:
                     op = float(d["Open"].iloc[-1])
                     prevc = float(c.iloc[-2])
-                    open_pct = (op / prevc - 1) * 100
+                    open_pct = (op / prevc - 1) * 100      # the GAP at the open
                     holding = price > op
+                    # INTRADAY GAIN — % change since the 9:30 ET open, as opposed
+                    # to `day` which is measured from yesterday's 4pm close.
+                    if op:
+                        intraday_pct = (price / op - 1) * 100
             except Exception:
                 pass
 
@@ -249,6 +253,7 @@ def snapshot(universe=None):
                          "wk2": wk2, "mon2": mon2, "smooth2": smooth2,
                          "atr_pct": atr_pct, "move_atr": move_atr,
                          "open_pct": open_pct, "holding": holding,
+                         "intraday_pct": intraday_pct,
                          "spans": spans, "struct": s.trend_structure(d),
                          "rets": (c.pct_change().tail(21) * 100).tolist(),
                          "live": bool(px_live),
