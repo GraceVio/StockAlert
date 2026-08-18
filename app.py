@@ -190,7 +190,13 @@ def show_table(df, numeric, index_col="Ticker", height=None, extra=None,
     # Only pass `height` when we actually want one. Newer Streamlit VALIDATES the
     # argument and rejects None outright (StreamlitInvalidHeightError), so the
     # kwarg has to be omitted rather than passed as None to get auto-sizing.
-    kw = {"use_container_width": True}
+    # Fixed column widths: without them Streamlit re-flows the columns as you
+    # scroll sideways, so they appear to jump. Only the index (Ticker/Sector)
+    # stays pinned; everything else keeps its slot.
+    kw = {"use_container_width": True,
+          "column_config": {c: st.column_config.Column(
+              width="medium" if c in ("Name", "Support", "Trend") else "small")
+              for c in d.columns}}
     if height is not None:
         kw["height"] = height
     if select_key:
@@ -454,7 +460,12 @@ with tabs[1]:
         + [("Trend", STATE.get((r.get("struct") or {}).get("state"), "")),
            ("Sector", r.get("sector") or "")]
     ) for r in sel[:20]])
-    show_table(sdf2, numcols)
+    show_table(sdf2, numcols, fmt={"×ATR": "{:+.1f}×"})
+    st.caption("**×ATR** = the move measured against this stock's own 14-day "
+               "average range — above ~2× is a statistically real breakout, not "
+               "noise. **Intraday**: 🟢 price is above today's open (buyers still "
+               "in control) · 🔴 it gapped up then sold off — up on the day but "
+               "being distributed.")
 
 # ---------------------------------------------------------- 5. dip ranking
 with tabs[2]:
@@ -468,6 +479,8 @@ with tabs[2]:
         "Support": (r.get("support_tag") or "—"),
         "Room": (r.get("upside") or {}).get("room_r"),
         "In range %": r.get("range_pos"),
+        "Trend": STATE_LBL.get(((r.get("trend_heat") or {}).get("struct")
+                                or {}).get("state"), ""),
         "Sector": (r.get("sector") or {}).get("name", "") if isinstance(r.get("sector"), dict) else "",
     } for r in rrows])
     for _c, _n in (("Price", 2), ("RSI", 0), ("Room", 1), ("In range %", 0)):

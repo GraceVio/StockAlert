@@ -148,6 +148,7 @@ GBP_SUFFIXES = (".L",)
 # Human-readable company names (shown next to tickers so you know what you're
 # looking at when you open Trade Republic). Covers the watchlist + sector names.
 NAMES = {
+    "SNDK": "SanDisk",
     "SPY": "S&P 500 ETF", "QQQ": "Nasdaq 100 ETF",
     "NVDA": "Nvidia", "AAPL": "Apple", "MSFT": "Microsoft", "AMZN": "Amazon",
     "GOOGL": "Alphabet (Google)", "META": "Meta", "AVGO": "Broadcom",
@@ -1320,6 +1321,7 @@ SECTOR_MAP = {
 # that sector's rotation — close enough to answer "is my sector hot today", not a
 # measurement of the European sector itself.
 SECTOR_MAP.update({
+    "SNDK": "Technology",
     # --- US technology & software
     "TXN": "Technology", "ANET": "Technology", "PANW": "Technology",
     "CRWD": "Technology", "SNOW": "Technology", "ZS": "Technology",

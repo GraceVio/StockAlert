@@ -206,6 +206,31 @@ def snapshot(universe=None):
             except Exception:
                 pass
 
+            # SIGNIFICANCE + INTRADAY HOLD.
+            # A raw % says nothing on its own: +3% is huge for KO and routine for
+            # a small cap. Dividing by the stock's own 14-day average range makes
+            # moves comparable (>2x ATR = a statistically real breakout).
+            # And a stock can gap +25% then be sold all day to +12%: still "up"
+            # against yesterday, but being distributed. Comparing price to TODAY'S
+            # OPEN separates "up and holding" from "up but fading".
+            atr_pct = move_atr = open_pct = None
+            holding = None
+            try:
+                tr = ((d["High"] - d["Low"]) / d["Close"] * 100).tail(14)
+                atr_pct = float(tr.mean())
+                if atr_pct and atr_pct > 0:
+                    move_atr = day / atr_pct
+            except Exception:
+                pass
+            try:
+                if bar_is_today:
+                    op = float(d["Open"].iloc[-1])
+                    prevc = float(c.iloc[-2])
+                    open_pct = (op / prevc - 1) * 100
+                    holding = price > op
+            except Exception:
+                pass
+
             # SPEED / INTRADAY TRAVEL — "it went from -5% to +5% today" is the
             # signature of money rushing in. Measured against yesterday's close.
             lo_pct = hi_pct = recover = None
@@ -222,6 +247,8 @@ def snapshot(universe=None):
                          "smooth3": smooth3, "money": money, "lo_pct": lo_pct,
                          "hi_pct": hi_pct, "recover": recover, "price": price,
                          "wk2": wk2, "mon2": mon2, "smooth2": smooth2,
+                         "atr_pct": atr_pct, "move_atr": move_atr,
+                         "open_pct": open_pct, "holding": holding,
                          "spans": spans, "struct": s.trend_structure(d),
                          "rets": (c.pct_change().tail(21) * 100).tolist(),
                          "live": bool(px_live),
