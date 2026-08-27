@@ -55,6 +55,7 @@ HELP = (
     "/earnings — 📅 watchlist earnings, next 7 days\n"
     "/macro — 🏦 CPI/Fed/GDP events + 🔴🟠🟡 impact\n"
     "/news — 🌍 market news · /news SYM 📰 for one stock\n\n"
+    "/insider SYM — 🧑‍💼 has management been buying its own stock?\n\n"
     "<b>⚙️ Settings</b>\n"
     "/account — 💼 show/set account size (for position sizing)\n"
     "/mode — ⏱ fast · normal · wide (stop width + target)\n"
@@ -78,6 +79,7 @@ COMMAND_MENU = [
     ("flow",      "Which stocks big money buys as a basket"),
     ("rank",      "King Stocks — best dip-buy setups now"),
     ("score",     "Fit score 0-100 for a stock (e.g. NVDA)"),
+    ("insider",   "Insider buying of a stock (SEC Form 4)"),
     ("find",      "Find a ticker by company name"),
     ("scan",      "Run the dip-in-uptrend scan now"),
     ("sector",    "Sector strength ranking"),
@@ -277,6 +279,53 @@ def _sector_menu_markup():
     return {"inline_keyboard": [tf_row, overview] + sector_rows}
 
 
+def _do_insider(sym: str) -> str:
+    """Open-market insider buying for one ticker (SEC Form 4, code "P").
+
+    Deliberately BUYS ONLY. Insider selling is near-meaningless — executives sell
+    constantly for taxes, diversification and pre-scheduled 10b5-1 plans — while
+    an open-market purchase is someone spending their own money on the company
+    they run. The signal that holds up in the research is a CLUSTER: several
+    different insiders buying inside a few weeks.
+    """
+    try:
+        import finnhub_data as fh
+    except Exception:
+        return "Insider data needs the finnhub module."
+    if not fh.has_key():
+        return "No FINNHUB_API_KEY set — insider filings need a free Finnhub key."
+    name = s.name_for(sym) or sym
+    sig = fh.insider_signal(sym, days=90)
+    if sig is None:
+        return (f"No insider data for <b>{sym}</b>. Finnhub covers US-listed "
+                "companies only — European tickers (SAP.DE, ADYEN.AS) are not "
+                "included.")
+    b = sig["raw"]
+    head = f"🧑‍💼 <b>{name}</b> ({sym}) — insider buying, last 90 days"
+    if sig["strength"] == 0:
+        return (head + NL + NL + "No open-market purchases filed."
+                + NL + NL + "<i>Normal. Insiders buy rarely; most Form 4 filings are "
+                "option exercises and share grants, which say nothing.</i>")
+    lines = [head, "", sig["text"], ""]
+    lines.append(f"• buyers: <b>{b['buyers']}</b> · filings: {b['trades']}")
+    lines.append(f"• shares: {b['shares']:,}")
+    if b["value"]:
+        lines.append(f"• value: ~${b['value']:,.0f}")
+    if b["senior"]:
+        lines.append("• includes a <b>CEO / CFO / chairman</b>")
+    lines.append("")
+    if sig["strength"] == 3:
+        lines.append("<i>A cluster buy is the version of this signal with real "
+                     "history behind it — but it plays out over MONTHS, not days. "
+                     "Treat it as a reason to keep the stock on your list, not as "
+                     "an entry. Use /score for the entry.</i>")
+    else:
+        lines.append("<i>Mild signal. One or two buyers is weak evidence — the "
+                     "documented edge needs a cluster of 3+. Use /score for the "
+                     "entry.</i>")
+    return NL.join(lines)
+
+
 def _do_sector():
     """Send the interactive sector menu (buttons handled via callbacks)."""
     _send_menu(
@@ -440,6 +489,15 @@ def _do_mode(arg: str):
             f"<i>Resets on restart unless you set a TRADE_MODE secret.</i>")
 
 
+def _insider_probe() -> str:
+    """One-line check that the Finnhub plan actually serves Form 4 data."""
+    try:
+        import finnhub_data as fh
+        return "Insider feed: " + fh.diagnose_insider()
+    except Exception as e:
+        return f"Insider feed: error ({e})"
+
+
 def _do_diag():
     """Show which secrets/keys the running bot can actually see (values hidden)."""
     def yn(k):
@@ -452,6 +510,7 @@ def _do_diag():
         f"FINNHUB_API_KEY: {yn('FINNHUB_API_KEY')}  → company news (US)\n"
         f"ACCOUNT_EUR: {yn('ACCOUNT_EUR')}  → using €{s.load_account():.0f}\n"
         f"TRADE_MODE: {yn('TRADE_MODE')}  → {s.load_mode()} mode\n\n"
+        f"{_insider_probe()}\n\n"
         "<i>❌ means the secret name doesn't match, isn't mapped into the workflow "
         "env, or the poller wasn't restarted. Values are never shown here.</i>"
     )
@@ -551,6 +610,13 @@ def handle(text: str):
             return nw.stock_news_text(q)
         _reply("🌍 Reading market news… one moment.")
         return nw.market_news_text()
+    if cmd == "/insider":
+        q = (parts[1] if len(parts) > 1 else "").strip().upper()
+        if not q:
+            return ("Usage: <code>/insider NVDA</code> — open-market share "
+                    "purchases by a company's own executives (SEC Form 4).")
+        _reply("🧑‍💼 Checking insider filings…")
+        return _do_insider(q)
     if cmd == "/backtest":
         _reply("📈 Backtesting the whole watchlist… this takes a minute.")
         bt.run(send=True)

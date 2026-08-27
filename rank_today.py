@@ -532,6 +532,31 @@ def _analyst_line(ticker: str, price: float, cur: str) -> str:
     return "\n🎯 <b>Analysts</b> <i>(Wall Street)</i>: " + " · ".join(bits)
 
 
+def _insider_line(ticker: str) -> str:
+    """Open-market insider BUYING (SEC Form 4, code "P") over the last 90 days.
+
+    Shown as CONTEXT, never folded into the score — deliberately. The documented
+    edge in insider buying plays out over MONTHS, while the score rates an entry
+    for a hold of hours to a couple of days; and unlike every factor that does
+    carry weight here, this one has not been backtested on our own data. Giving
+    it points would repeat exactly the mistake of weighting a factor because it
+    was newly added rather than because it was measured.
+    """
+    try:
+        import finnhub_data as fh
+    except Exception:
+        return ""
+    if not fh.has_key():
+        return ""
+    try:
+        sig = fh.insider_signal(ticker, days=90)
+    except Exception:
+        return ""
+    if not sig or sig["strength"] <= 0:
+        return ""
+    return "\n🧑‍💼 <b>Insiders</b> <i>(their own money)</i>: " + sig["text"]
+
+
 def score_one(ticker: str, healthy=None) -> str:
     """Detailed 0-100 breakdown for a single ticker (any symbol you type)."""
     ticker = ticker.strip().upper()
@@ -613,8 +638,10 @@ def score_one(ticker: str, healthy=None) -> str:
                        f"{(' · '.join(r['reasons']))}")
 
     analyst = _analyst_line(ticker, r["price"], cur)
+    insider = _insider_line(ticker)
     sections = ["\n".join(head), snapshot]
-    for blk in (_support_line(r), _size_line(r), earn, news_line, analyst, eline):
+    for blk in (_support_line(r), _size_line(r), earn, news_line, analyst,
+                insider, eline):
         blk = blk.strip("\n") if blk else ""
         if blk:
             sections.append(blk)
