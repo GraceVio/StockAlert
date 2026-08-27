@@ -375,6 +375,35 @@ def earnings_warning(ticker: str) -> str:
     if im:
         line += (f"\n   📊 Options expect a <b>±{im['pct']:.0f}%</b> swing in the SHARE PRICE "
                  f"on the report — a tighter stop will likely be gapped through.")
+    # MEASURED earnings-day history + whether the stop actually covers it.
+    # Tested on INTU/CRM/CRWD in the same week: RSI and the run-up separated
+    # none of them, but the stock's OWN earnings history did - INTU typically
+    # moves +-8.9% (worst -20%) against a 5.9% stop, CRM only +-3.4%. That
+    # comparison is the one thing here that changes a decision.
+    try:
+        import earnings_guard as _eg
+        _r = _eg.past_reactions(ticker)
+        _e = _eg.extension(ticker)
+        _stop = _eg._stop_pct(ticker, _e["price"]) if _e else None
+        if _r:
+            _h = " · ".join(f"{m:+.1f}%" for m in _r["moves"])
+            _n = len(_r["moves"])
+            line += f"\n   📊 Its last {_n} earnings days: {_h}"
+            line += (f"\n   Typical <b>±{_r['avg_abs']:.1f}%</b> · "
+                     f"worst <b>{_r['worst']:+.1f}%</b>")
+            if _stop:
+                if _r["avg_abs"] >= _stop:
+                    line += (f"\n   🛑 <b>Your {_stop:.1f}% stop cannot "
+                             "cover that</b> — the gap opens past it.")
+                elif abs(_r["worst"]) >= _stop:
+                    line += (f"\n   🟠 Your {_stop:.1f}% stop covers a "
+                             "normal move, but not its worst one.")
+                else:
+                    line += (f"\n   🟢 Its moves have stayed inside your "
+                             f"{_stop:.1f}% stop — history is not a cap, though.")
+    except Exception:
+        pass
+
     est = next_eps_estimate(ticker)
     if est is not None:
         line += (f"\n   🔢 Consensus EPS estimate: {est:.2f} "
@@ -397,9 +426,35 @@ def earnings_text():
         im = implied_move(e["ticker"])
         mv = f" · options expect ±{im['pct']:.0f}%" if im else ""
         lines.append(f"{emoji} <b>{e['ticker']}</b>{nm} — {when}{mv}")
+        # The one comparison that separated INTU (typical ±8.9% vs a 5.9% stop)
+        # from CRM (±3.4%): what the stock ACTUALLY does on earnings day, against
+        # the stop you would actually be using.
+        try:
+            import earnings_guard as _eg
+            _r = _eg.past_reactions(e["ticker"])
+            _x = _eg.extension(e["ticker"])
+            _stop = _eg._stop_pct(e["ticker"], _x["price"]) if _x else None
+            if _r and _stop:
+                if _r["avg_abs"] >= _stop:
+                    mark = (f"🛑 usually moves ±{_r['avg_abs']:.1f}% — "
+                            f"more than your {_stop:.1f}% stop")
+                elif abs(_r["worst"]) >= _stop:
+                    mark = (f"🟠 usually ±{_r['avg_abs']:.1f}% (inside your stop) "
+                            f"but has gapped {_r['worst']:+.1f}%")
+                else:
+                    mark = (f"🟢 usually ±{_r['avg_abs']:.1f}% — inside your "
+                            f"{_stop:.1f}% stop")
+                lines.append(f"      {mark}")
+            elif _r:
+                lines.append(f"      usually moves ±{_r['avg_abs']:.1f}% "
+                             f"(worst {_r['worst']:+.1f}%)")
+        except Exception:
+            pass
     lines.append("\n<i>±% = the swing the options market prices in for the report "
-                 "(a risk gauge, not a direction). Times are in CET — exact for US "
-                 "names, approximate for EU/UK.</i>")
+                 "(a risk gauge, not a direction). The 🛑/🟠/🟢 line compares what "
+                 "the stock ACTUALLY did on its last earnings days against your "
+                 "own stop — 🛑 means a gap would open past it. Times are in CET "
+                 "— exact for US names, approximate for EU/UK.</i>")
     return "\n".join(lines)
 
 

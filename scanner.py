@@ -180,7 +180,7 @@ NAMES = {
     "DUK": "Duke Energy", "SO": "Southern Co", "D": "Dominion", "AEP": "American Electric",
     "EXC": "Exelon",
     # trimmed names (shown in /rank as higher-risk opportunities)
-    "IREN": "IREN", "IONQ": "IonQ", "QBTS": "D-Wave", "RGTI": "Rigetti",
+    "IREN": "IREN Limited", "IONQ": "IonQ", "QBTS": "D-Wave", "RGTI": "Rigetti",
     "NVTS": "Navitas", "CRML": "Critical Metals", "RCAT": "Red Cat",
     "SNEX": "StoneX", "NBIS": "Nebius", "RBRK": "Rubrik", "ALAB": "Astera Labs",
     "SPCX": "SpaceX", "XK4.F": "Gabler Group", "SSIT.L": "Seraphim Space",

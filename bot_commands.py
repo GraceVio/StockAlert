@@ -56,6 +56,7 @@ HELP = (
     "/macro — 🏦 CPI/Fed/GDP events + 🔴🟠🟡 impact\n"
     "/news — 🌍 market news · /news SYM 📰 for one stock\n\n"
     "/insider SYM — 🧑‍💼 has management been buying its own stock?\n\n"
+    "/earnguard SYM — ⚠️ earnings gap risk before a report\n\n"
     "<b>⚙️ Settings</b>\n"
     "/account — 💼 show/set account size (for position sizing)\n"
     "/mode — ⏱ fast · normal · wide (stop width + target)\n"
@@ -80,6 +81,7 @@ COMMAND_MENU = [
     ("rank",      "King Stocks — best dip-buy setups now"),
     ("score",     "Fit score 0-100 for a stock (e.g. NVDA)"),
     ("insider",   "Insider buying of a stock (SEC Form 4)"),
+    ("earnguard", "Earnings gap risk for a stock"),
     ("find",      "Find a ticker by company name"),
     ("scan",      "Run the dip-in-uptrend scan now"),
     ("sector",    "Sector strength ranking"),
@@ -610,6 +612,18 @@ def handle(text: str):
             return nw.stock_news_text(q)
         _reply("🌍 Reading market news… one moment.")
         return nw.market_news_text()
+    if cmd == "/earnguard":
+        q = (parts[1] if len(parts) > 1 else "").strip().upper()
+        if not q:
+            return ("Usage: <code>/earnguard NVDA</code> — earnings gap risk: "
+                    "what this stock actually does on earnings day, and whether "
+                    "your stop can cover it.")
+        _reply("⚠️ Checking earnings risk…")
+        try:
+            import earnings_guard as eg
+            return eg.guard_text(q)
+        except Exception as e:
+            return f"Could not read earnings data for {q} ({e})."
     if cmd == "/insider":
         q = (parts[1] if len(parts) > 1 else "").strip().upper()
         if not q:
