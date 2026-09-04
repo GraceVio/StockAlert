@@ -260,15 +260,28 @@ def macro_text():
 
 
 # ------------------------------------------------------------- earnings
-def upcoming_earnings(days=EARN_LOOKAHEAD):
+def upcoming_earnings(days=EARN_LOOKAHEAD, universe=False):
+    """Watchlist names reporting within `days`.
+
+    `universe=True` also scans every ticker the sector heatmap tracks, tagging
+    those as extra=True. This exists because the bot twice looked "broken" for
+    missing a report (IREN, Zscaler) when in truth both were simply absent from
+    the watchlist — they show up in /hot and the sector pages, so their silence
+    in /earnings read as a bug rather than as a gap in coverage.
+    """
+    pool = list(s.WATCHLIST)
+    if universe:
+        extra = [t for t in getattr(s, "SECTOR_MAP", {}) if t not in s.WATCHLIST]
+        pool += sorted(extra)
     out = []
-    for t in s.WATCHLIST:
+    for t in pool:
         if t in ("SPY", "QQQ"):
             continue
         dte = s.days_to_earnings(t)
         if dte is not None and 0 <= dte <= days:
-            out.append({"ticker": t, "days": dte, "name": s.name_for(t)})
-    out.sort(key=lambda x: x["days"])
+            out.append({"ticker": t, "days": dte, "name": s.name_for(t),
+                        "extra": t not in s.WATCHLIST})
+    out.sort(key=lambda x: (x["days"], x["extra"]))
     return out
 
 
@@ -412,20 +425,22 @@ def earnings_warning(ticker: str) -> str:
 
 
 def earnings_text():
-    ev = upcoming_earnings()
+    ev = upcoming_earnings(universe=True)
     if not ev:
         return ("📅 <b>Earnings — next 7 days</b>\n\nNone of your watchlist reports "
                 "in the next 7 days.")
     lines = ["📅 <b>Earnings — next 7 days</b>",
              "🔴 ≤2 days · 🟠 3-4 · 🟡 5-7  (gap risk — avoid new entries just before)",
+             "➕ = tracked in the sector pages but NOT in your watchlist",
              ""]
     for e in ev:
         when = _earn_when(e["ticker"], e["days"])
         emoji, _ = earnings_impact(e["days"])
         nm = f" · {e['name']}" if e["name"] else ""
+        tag = " ➕" if e.get("extra") else ""
         im = implied_move(e["ticker"])
         mv = f" · options expect ±{im['pct']:.0f}%" if im else ""
-        lines.append(f"{emoji} <b>{e['ticker']}</b>{nm} — {when}{mv}")
+        lines.append(f"{emoji} <b>{e['ticker']}</b>{tag}{nm} — {when}{mv}")
         # The one comparison that separated INTU (typical ±8.9% vs a 5.9% stop)
         # from CRM (±3.4%): what the stock ACTUALLY does on earnings day, against
         # the stop you would actually be using.

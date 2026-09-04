@@ -1515,7 +1515,73 @@ def next_earnings_ts(ticker: str):
     yfinance stores the timestamp in US/Eastern. We convert it to Berlin so the
     date AND time are shown in the user's own timezone. NOTE: the TIME is reliable
     for US names but only approximate for EU/UK names (yfinance uses a placeholder
-    Eastern time for them); the DATE is dependable either way."""
+    Eastern time for them); the DATE is dependable either way.
+
+    Memoised per process: a single /earnings run asks for the same ticker several
+    times (day count, then display time, then the guard), and every repeat was a
+    separate network round-trip. Earnings dates do not change mid-run, so this is
+    free and roughly halves the scan."""
+    key = ticker.upper()
+    if key not in _EARN_TS_CACHE:
+        _EARN_TS_CACHE[key] = _next_earnings_ts_uncached(ticker)
+        _earn_cache_save()
+    return _EARN_TS_CACHE[key]
+
+
+# Disk-backed so the cost is paid ONCE a day, not on every command. Scanning the
+# full universe cold takes ~2 minutes of network round-trips, which is fine for
+# the 07:12 digest but far too slow for /earnings typed in chat. Earnings dates
+# move rarely, so a 12-hour TTL is safe; a stale entry is at worst a day old and
+# the date itself is what matters, not the minute.
+_EARN_CACHE_FILE = "earnings_cache.json"
+_EARN_CACHE_TTL_H = 12
+_EARN_TS_CACHE = {}
+_EARN_CACHE_DIRTY = {"n": 0}
+
+
+def _earn_cache_load():
+    try:
+        import json
+        with open(_EARN_CACHE_FILE, encoding="utf-8") as f:
+            raw = json.load(f)
+        stamp = raw.get("_saved_at")
+        if not stamp:
+            return
+        age = (dt.datetime.now(dt.timezone.utc)
+               - dt.datetime.fromisoformat(stamp)).total_seconds() / 3600
+        if age > _EARN_CACHE_TTL_H:
+            return
+        for k, v in raw.items():
+            if k.startswith("_"):
+                continue
+            _EARN_TS_CACHE[k] = pd.Timestamp(v) if v else None
+    except Exception:
+        pass
+
+
+def _earn_cache_save(force=False):
+    # Batch the writes: saving on every single lookup would mean ~150 file
+    # writes per scan. The atexit flush below catches whatever batching left.
+    _EARN_CACHE_DIRTY["n"] += 1
+    if not force and _EARN_CACHE_DIRTY["n"] % 10:
+        return
+    try:
+        import json
+        out = {k: (v.isoformat() if v is not None else None)
+               for k, v in _EARN_TS_CACHE.items()}
+        out["_saved_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        with open(_EARN_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(out, f)
+    except Exception:
+        pass
+
+
+_earn_cache_load()
+import atexit as _atexit
+_atexit.register(lambda: _earn_cache_save(force=True))
+
+
+def _next_earnings_ts_uncached(ticker: str):
     try:
         cal = yf.Ticker(ticker).get_earnings_dates(limit=8)
         if cal is None or cal.empty:
