@@ -40,6 +40,8 @@ for _k in ("ALPACA_KEY_ID", "ALPACA_SECRET_KEY", "FINNHUB_API_KEY",
 import scanner as s                      # noqa: E402
 import market_mood as mm                 # noqa: E402
 import rank_today as rk                  # noqa: E402
+import events as ev                      # noqa: E402
+import earnings_guard as eg              # noqa: E402
 
 st.set_page_config(page_title="StockAlert", page_icon="👑", layout="wide")
 
@@ -146,6 +148,54 @@ def get_snapshot():
 def get_rank(n=15):
     rows = rk.rank(n)
     return [{k: v for k, v in r.items() if k != "parts"} for r in rows]
+
+
+@st.cache_data(ttl=1800, show_spinner="Reading earnings dates…")
+def get_earnings(days=21):
+    """Upcoming reports across the WHOLE known universe, already enriched.
+
+    Cached for 30 minutes: a cold scan walks ~200 tickers, and scanner keeps a
+    12h disk cache of the dates themselves, so this stays cheap after the first
+    run of the day. Returns plain dicts so Streamlit can hash the result.
+    """
+    out = []
+    for e in ev.upcoming_earnings(days=days, universe=True):
+        t = e["ticker"]
+        r = {"Ticker": ("➕ " if e.get("extra") else "") + t,
+             "Name": e["name"] or "", "In": e["days"], "When": "",
+             "Options ±%": None, "Typical ±%": None, "Worst": None,
+             "Stop %": None, "Verdict": ""}
+        ts = s.next_earnings_ts(t)
+        if ts is not None:
+            r["When"] = ts.strftime("%a %d %b, %H:%M")
+        try:
+            im = ev.implied_move(t)
+            if im:
+                r["Options ±%"] = im["pct"]
+        except Exception:
+            pass
+        try:
+            pr = eg.past_reactions(t)
+            ex = eg.extension(t)
+            stop = eg._stop_pct(t, ex["price"]) if ex else None
+            if stop:
+                r["Stop %"] = stop
+            if pr:
+                r["Typical ±%"] = pr["avg_abs"]
+                r["Worst"] = pr["worst"]
+                if stop:
+                    if pr["avg_abs"] >= stop:
+                        r["Verdict"] = "🛑 gaps past your stop"
+                    elif abs(pr["worst"]) >= stop:
+                        r["Verdict"] = "🟠 worst case breaks it"
+                    else:
+                        r["Verdict"] = "🟢 inside your stop"
+            else:
+                r["Verdict"] = "— no history"
+        except Exception:
+            pass
+        out.append(r)
+    return out
 
 
 def pct(v, nd=1):
@@ -328,7 +378,7 @@ st.markdown("<div class='hdr'>" + "".join(bits) + "</div>", unsafe_allow_html=Tr
 # purely about choosing a stock.
 # Hidden by default. st.pills gives small side-by-side pills with a SUBTLE
 # selected state and clears when you tap the active one again.
-_map = st.pills("Market map", ["🌡️ Sectors", "🧲 Baskets"],
+_map = st.pills("Market map", ["🌡️ Sectors", "🧲 Baskets", "📅 Earnings"],
                 selection_mode="single", default=None,
                 label_visibility="collapsed")
 
@@ -410,6 +460,25 @@ if _map == "🧲 Baskets":
                      "stocks have moved 1%+ today — baskets need real movement to "
                      "form, so expect more once the US session is running.")
         st.caption(note)
+
+# ------------------------------------------------------------ 1c. earnings
+if _map == "📅 Earnings":
+    st.subheader("Who reports soon — and can your stop survive it?")
+    st.caption("Scans EVERY ticker the bot knows (not just your watchlist). "
+               "➕ marks a stock that is NOT in your watchlist.")
+    erows = get_earnings(21)
+    if not erows:
+        st.info("Nothing reports in the next 3 weeks.")
+    else:
+        edf = pd.DataFrame(erows)
+        show_table(edf, ["Options ±%", "Typical ±%", "Worst", "Stop %"],
+                   fmt={"In": "{:.0f}d"})
+        st.caption("**Typical ±%** = what the stock ACTUALLY did on its last "
+                   "earnings days. **Stop %** = how far your ATR stop sits below "
+                   "price, in the mode you have set. 🛑 means an average "
+                   "earnings move opens PAST your stop, so it cannot execute at "
+                   "your price. Nobody can tell you the direction — this is "
+                   "about size and whether your stop covers it.")
 
 st.divider()
 tabs = st.tabs(["🔥 Hot money", "🏆 Strongest", "👑 Dip ranking", "🔎 Stock",

@@ -271,8 +271,13 @@ def upcoming_earnings(days=EARN_LOOKAHEAD, universe=False):
     """
     pool = list(s.WATCHLIST)
     if universe:
-        extra = [t for t in getattr(s, "SECTOR_MAP", {}) if t not in s.WATCHLIST]
-        pool += sorted(extra)
+        # EVERY ticker the bot knows, not just the sector-heatmap ones. Using
+        # SECTOR_MAP alone silently skipped 41 European names (BNP.PA, ROG.SW,
+        # P911.DE, ULVR.L …) that have entries in NAMES and are perfectly
+        # tradable — exactly the kind of quiet gap that made Zscaler look like
+        # a bug. Deduplicated, so a ticker in both lists is scanned once.
+        known = set(getattr(s, "SECTOR_MAP", {})) | set(getattr(s, "NAMES", {}))
+        pool += sorted(t for t in known if t not in set(s.WATCHLIST))
     out = []
     for t in pool:
         if t in ("SPY", "QQQ"):
