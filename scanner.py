@@ -1539,6 +1539,51 @@ _EARN_TS_CACHE = {}
 _EARN_CACHE_DIRTY = {"n": 0}
 
 
+def pmap(fn, items, workers=8):
+    """Run `fn` over `items` in parallel threads, returning {item: result}.
+
+    Everything slow in this bot is a NETWORK wait, not computation: ~200 tickers
+    x ~0.6s of Yahoo round-trip is two minutes of doing nothing. Threads overlap
+    those waits.
+
+    DO NOT RAISE `workers`. Measured on the full 197-ticker universe:
+        sequential   ~120s   185/197 dates found
+        workers=4     ~42s   185/197
+        workers=8   ~36-50s  185/197
+        workers=16    ~62s    59/197   <- SLOWER *and* silently loses data
+    Past 8, Yahoo throttles and hands back empty responses, so the scan is both
+    slower AND wrong. A missing earnings date means a missed alert, which is the
+    one failure this bot must not have. 8 is a measured ceiling, not a guess.
+
+    Exceptions are swallowed per item (result None) so one bad ticker can never
+    take down a whole scan.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    out = {}
+
+    def one(it):
+        try:
+            return it, fn(it)
+        except Exception:
+            return it, None
+
+    items = list(items)
+    if not items:
+        return out
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for k, v in ex.map(one, items):
+            out[k] = v
+    return out
+
+
+def prefetch_earnings_dates(tickers, workers=8):
+    """Warm the earnings-date cache for many tickers at once."""
+    todo = [t for t in dict.fromkeys(tickers) if t.upper() not in _EARN_TS_CACHE]
+    if todo:
+        pmap(next_earnings_ts, todo, workers=workers)
+        _earn_cache_save(force=True)
+
+
 def _earn_cache_load():
     try:
         import json
@@ -1559,6 +1604,9 @@ def _earn_cache_load():
         pass
 
 
+_EARN_CACHE_LOCK = __import__("threading").Lock()
+
+
 def _earn_cache_save(force=False):
     # Batch the writes: saving on every single lookup would mean ~150 file
     # writes per scan. The atexit flush below catches whatever batching left.
@@ -1570,8 +1618,9 @@ def _earn_cache_save(force=False):
         out = {k: (v.isoformat() if v is not None else None)
                for k, v in _EARN_TS_CACHE.items()}
         out["_saved_at"] = dt.datetime.now(dt.timezone.utc).isoformat()
-        with open(_EARN_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(out, f)
+        with _EARN_CACHE_LOCK:
+            with open(_EARN_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(out, f)
     except Exception:
         pass
 

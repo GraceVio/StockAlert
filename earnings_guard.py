@@ -73,6 +73,22 @@ def _reaction_day(ts, idx):
     return days[0] if days else None
 
 
+def prefetch(tickers, workers=8):
+    """Warm the price-history and earnings-date caches for many tickers at once.
+
+    past_reactions() needs 5 years of daily bars per ticker; fetched one after
+    another that is the slowest part of building an earnings table. These are
+    pure network waits, so overlapping them is close to free.
+    """
+    try:
+        s.prefetch_earnings_dates(tickers, workers=workers)
+        todo = [t for t in dict.fromkeys(tickers) if t not in _HIST]
+        if todo:
+            s.pmap(_hist, todo, workers=workers)
+    except Exception:
+        pass
+
+
 def past_reactions(ticker: str, n: int = 6, as_of=None):
     """How this stock ACTUALLY moved on its last `n` earnings reaction days.
 

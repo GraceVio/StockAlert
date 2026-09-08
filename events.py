@@ -278,6 +278,13 @@ def upcoming_earnings(days=EARN_LOOKAHEAD, universe=False):
         # a bug. Deduplicated, so a ticker in both lists is scanned once.
         known = set(getattr(s, "SECTOR_MAP", {})) | set(getattr(s, "NAMES", {}))
         pool += sorted(t for t in known if t not in set(s.WATCHLIST))
+    # Fetch every missing earnings date CONCURRENTLY before the loop below. Done
+    # one at a time this was ~2 minutes of pure network waiting; the loop then
+    # runs off warm cache.
+    try:
+        s.prefetch_earnings_dates(pool)
+    except Exception:
+        pass
     out = []
     for t in pool:
         if t in ("SPY", "QQQ"):
@@ -330,7 +337,18 @@ def _current_price(tk):
         return None
 
 
+_IMPLIED_CACHE = {}
+
+
 def implied_move(ticker: str):
+    """Memoised wrapper — one option-chain fetch per ticker per process."""
+    k = ticker.upper()
+    if k not in _IMPLIED_CACHE:
+        _IMPLIED_CACHE[k] = _implied_move_uncached(ticker)
+    return _IMPLIED_CACHE[k]
+
+
+def _implied_move_uncached(ticker: str):
     """The swing the OPTIONS market expects around the next earnings, as a %% of
     price (the at-the-money straddle for the first expiry after earnings). This is
     a RISK gauge — how big a gap to expect — NOT a direction. None if unavailable."""
@@ -438,6 +456,16 @@ def earnings_text():
              "🔴 ≤2 days · 🟠 3-4 · 🟡 5-7  (gap risk — avoid new entries just before)",
              "➕ = tracked in the sector pages but NOT in your watchlist",
              ""]
+    # Warm every per-ticker cache CONCURRENTLY first: histories, earnings dates
+    # and option chains are all network waits, and the loop below hits each of
+    # them. Serially this grew with the size of earnings season.
+    _syms = [e["ticker"] for e in ev]
+    try:
+        import earnings_guard as _eg
+        _eg.prefetch(_syms)
+        s.pmap(implied_move, _syms)
+    except Exception:
+        pass
     for e in ev:
         when = _earn_when(e["ticker"], e["days"])
         emoji, _ = earnings_impact(e["days"])

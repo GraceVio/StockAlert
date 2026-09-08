@@ -158,8 +158,17 @@ def get_earnings(days=21):
     12h disk cache of the dates themselves, so this stays cheap after the first
     run of the day. Returns plain dicts so Streamlit can hash the result.
     """
+    evs = ev.upcoming_earnings(days=days, universe=True)
+    # Same trick as the Telegram digest: overlap the network waits instead of
+    # paying for them one ticker at a time.
+    syms = [e["ticker"] for e in evs]
+    try:
+        eg.prefetch(syms)
+        s.pmap(ev.implied_move, syms)
+    except Exception:
+        pass
     out = []
-    for e in ev.upcoming_earnings(days=days, universe=True):
+    for e in evs:
         t = e["ticker"]
         r = {"Ticker": ("➕ " if e.get("extra") else "") + t,
              "Name": e["name"] or "", "In": e["days"], "When": "",
@@ -243,12 +252,27 @@ def show_table(df, numeric, index_col="Ticker", height=None, extra=None,
     # Fixed column widths: without them Streamlit re-flows the columns as you
     # scroll sideways, so they appear to jump. Only the index (Ticker/Sector)
     # stays pinned; everything else keeps its slot.
-    # No explicit width -> each column sizes to fit its own content (no wasted
-    # space). Column ORDER still comes from the DataFrame's column order, which
-    # pandas never reshuffles on scroll, so this doesn't bring back the
-    # jumping — it only stops columns being forced wider than they need.
+    # Width = MEASURED from the content, then PINNED in pixels.
+    #
+    # Leaving width unset lets Streamlit size each column to its content, but it
+    # re-measures while you scroll sideways, so columns visibly jump. Forcing
+    # "small"/"medium" stops the jumping but wastes space on short columns.
+    # Streamlit accepts an integer pixel width, which gives both: each column is
+    # as wide as it needs to be, and it never changes.
+    def _px(col):
+        if col in numeric or col in (fmt or {}):
+            body = 8                      # "+123.4%" / "-12.7%" style values
+        else:
+            try:
+                body = int(d[col].astype(str).str.len().max() or 0)
+            except Exception:
+                body = 10
+        chars = max(len(str(col)) + 2, min(body, 34))   # +2 = sort arrow room
+        return max(72, min(330, int(chars * 8.4) + 22))
+
     kw = {"use_container_width": True,
-          "column_config": {c: st.column_config.Column() for c in d.columns}}
+          "column_config": {c: st.column_config.Column(width=_px(c))
+                            for c in d.columns}}
     if height is not None:
         kw["height"] = height
     if select_key:
