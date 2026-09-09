@@ -160,20 +160,27 @@ def get_earnings(days=21):
     12h disk cache of the dates themselves, so this stays cheap after the first
     run of the day. Returns plain dicts so Streamlit can hash the result.
     """
-    evs = ev.upcoming_earnings(days=days, universe=True)
+    try:
+        evs = ev.upcoming_earnings(days=days, universe=True)
+    except TypeError:
+        # Older events.py without the `universe` argument: watchlist only.
+        evs = ev.upcoming_earnings(days=days)
     # Same trick as the Telegram digest: overlap the network waits instead of
     # paying for them one ticker at a time.
     syms = [e["ticker"] for e in evs]
     try:
         eg.prefetch(syms)
         s.pmap(ev.implied_move, syms)
-    except Exception:
-        pass
+    except (AttributeError, TypeError, Exception):
+        pass                      # no prefetch available -> just slower
     out = []
     for e in evs:
         t = e["ticker"]
+        # A European suffix means the date is a vendor estimate. Tested inline
+        # rather than via earnings_guard so a partial deploy (app.py newer than
+        # the modules) degrades instead of crashing the page.
         r = {"Ticker": ("➕ " if e.get("extra") else "") + t
-                       + (" ~" if eg.date_is_estimated(t) else ""),
+                       + (" ~" if "." in t else ""),
              "Name": e["name"] or "", "In": e["days"], "When": "",
              "Options ±%": None, "Typical ±%": None, "Worst": None,
              "Stop %": None, "Verdict": ""}
