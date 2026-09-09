@@ -73,6 +73,22 @@ def _reaction_day(ts, idx):
     return days[0] if days else None
 
 
+def date_is_estimated(ticker: str) -> bool:
+    """True when the earnings DATE should not be trusted as confirmed.
+
+    yfinance's dates are dependable for US names (they come from the exchange
+    feed) but for European tickers they are a VENDOR ESTIMATE extrapolated from
+    past reporting patterns. Verified on Gerresheimer (GXI.DE): yfinance said
+    16 Sep 2026, Trade Republic said 13 Sep, and the company's own IR calendar
+    says 14 OCTOBER. Both feeds were guessing, because Gerresheimer's calendar
+    was disrupted (2025 accounts delayed past 31 Mar, SDAX exclusion, AGM pushed
+    to 1 Sep) and pattern-based estimates broke.
+
+    A European suffix is the signal: SAP.DE, ADYEN.AS, AZN.L, NESN.SW.
+    """
+    return "." in (ticker or "")
+
+
 def prefetch(tickers, workers=8):
     """Warm the price-history and earnings-date caches for many tickers at once.
 
@@ -231,8 +247,9 @@ def guard_text(ticker: str, as_of=None) -> str:
         slot = (" (after the US close)" if g["after_close"]
                 else " (before the US open)")
     soon = days is not None and days <= 7
-    L = [("⚠️" if soon else "\U0001f4c5") + f" <b>{name}</b> ({ticker}) reports "
-         f"<b>{when.strftime('%a %d %b, %H:%M')} German time</b>{slot}"]
+    L = [("⚠️" if soon else "\U0001f4c5") + f" <b>{name}</b> ({ticker}) publishes "
+         f"RESULTS <b>{when.strftime('%a %d %b')}</b>, ~"
+         f"{when.strftime('%H:%M')} German time{slot}"]
     if days == 0:
         L.append("\U0001f534 <b>That is TODAY.</b>")
     elif days == 1:
@@ -241,6 +258,20 @@ def guard_text(ticker: str, as_of=None) -> str:
         L.append(f"\U0001f7e1 In <b>{days} days</b>.")
     else:
         L.append(f"In <b>{days} days</b> — far off, nothing to act on yet.")
+    if date_is_estimated(ticker):
+        L.append("⚠️ <b>This date is an ESTIMATE, not confirmed.</b> For "
+                 "European stocks the data feed guesses from past reporting "
+                 "patterns and is often days or WEEKS out. Check the date in "
+                 "Trade Republic or the company's own investor-relations "
+                 "calendar before you act on it.")
+    if is_us:
+        L.append("<i>This is the RESULTS RELEASE — the numbers, which is what "
+                 "gaps the price. The analyst call follows about an hour later; "
+                 "guidance there can move it a second time.</i>")
+    else:
+        L.append("<i>This is the RESULTS RELEASE — the numbers. European "
+                 "companies usually publish around 07:00 CET, BEFORE Xetra "
+                 "opens at 09:00, so the gap lands at the open.</i>")
     L.append("")
 
     # Beyond a week the gap-risk alarm is noise; show the history as reference

@@ -25,6 +25,8 @@ import os
 import datetime as dt
 from zoneinfo import ZoneInfo
 
+ET_ = ZoneInfo("America/New_York")   # for the after-close / before-open test
+
 import pandas as pd
 import streamlit as st
 
@@ -170,13 +172,23 @@ def get_earnings(days=21):
     out = []
     for e in evs:
         t = e["ticker"]
-        r = {"Ticker": ("➕ " if e.get("extra") else "") + t,
+        r = {"Ticker": ("➕ " if e.get("extra") else "") + t
+                       + (" ~" if eg.date_is_estimated(t) else ""),
              "Name": e["name"] or "", "In": e["days"], "When": "",
              "Options ±%": None, "Typical ±%": None, "Worst": None,
              "Stop %": None, "Verdict": ""}
         ts = s.next_earnings_ts(t)
         if ts is not None:
-            r["When"] = ts.strftime("%a %d %b, %H:%M")
+            # The feed buckets US releases at 16:00 ET (the closing bell) rather
+            # than giving a real minute, so the time is shown with a "~" and the
+            # useful part — WHEN the gap lands relative to the session — is
+            # spelled out instead. European tickers get no session note because
+            # their timestamps are placeholders (02:00, 20:00 ET and so on).
+            slot = ""
+            if "." not in t:
+                slot = (" after close" if ts.astimezone(ET_).hour >= 12
+                        else " before open")
+            r["When"] = ts.strftime("%a %d %b") + ", ~" + ts.strftime("%H:%M") + slot
         try:
             im = ev.implied_move(t)
             if im:
@@ -270,7 +282,7 @@ def show_table(df, numeric, index_col="Ticker", height=None, extra=None,
         chars = max(len(str(col)) + 2, min(body, 34))   # +2 = sort arrow room
         return max(72, min(330, int(chars * 8.4) + 22))
 
-    kw = {"use_container_width": True,
+    kw = {"width": "stretch",
           "column_config": {c: st.column_config.Column(width=_px(c))
                             for c in d.columns}}
     if height is not None:
@@ -487,9 +499,9 @@ if _map == "🧲 Baskets":
 
 # ------------------------------------------------------------ 1c. earnings
 if _map == "📅 Earnings":
-    st.subheader("Who reports soon — and can your stop survive it?")
-    st.caption("Scans EVERY ticker the bot knows (not just your watchlist). "
-               "➕ marks a stock that is NOT in your watchlist.")
+    st.subheader("Results releases")
+    st.caption("➕ not in your watchlist · ~ after a ticker = estimated date "
+               "(European — verify in Trade Republic)")
     erows = get_earnings(21)
     if not erows:
         st.info("Nothing reports in the next 3 weeks.")
@@ -497,12 +509,8 @@ if _map == "📅 Earnings":
         edf = pd.DataFrame(erows)
         show_table(edf, ["Options ±%", "Typical ±%", "Worst", "Stop %"],
                    fmt={"In": "{:.0f}d"})
-        st.caption("**Typical ±%** = what the stock ACTUALLY did on its last "
-                   "earnings days. **Stop %** = how far your ATR stop sits below "
-                   "price, in the mode you have set. 🛑 means an average "
-                   "earnings move opens PAST your stop, so it cannot execute at "
-                   "your price. Nobody can tell you the direction — this is "
-                   "about size and whether your stop covers it.")
+        st.caption("Typical ±% = what it actually did on past earnings days. "
+                   "🛑 = that move opens past your stop.")
 
 st.divider()
 tabs = st.tabs(["🔥 Hot money", "🏆 Strongest", "👑 Dip ranking", "🔎 Stock",
@@ -598,7 +606,7 @@ with tabs[2]:
         rdf.style.map(score_colour, subset=["Score"])
            .format({"Price": "{:.2f}", "RSI": "{:.0f}", "Room": "{:.1f}R",
                     "In range %": "{:.0f}%"}, na_rep="—"),
-        use_container_width=True)
+        width="stretch")
     st.caption("**Room** = how far to the next resistance, in units of your stop. "
                "Under 1R the target is blocked. **In range %** under 40 = a real "
                "pullback; over 55 = you'd be chasing.")
@@ -642,7 +650,7 @@ with tabs[3]:
         bcols = st.columns(min(4, len(picks)) or 1)
         for i, tk in enumerate(picks):
             if bcols[i % len(bcols)].button(tk, key=f"q{tk}",
-                                            use_container_width=True):
+                                            width="stretch"):
                 st.session_state["quick_sym"] = tk
                 st.rerun()
 
@@ -717,10 +725,10 @@ with tabs[4]:
         for sec_name, chunk in wdf.groupby("Sector", sort=False):
             with st.expander(f"{sec_name}  ·  {len(chunk)}", expanded=False):
                 st.dataframe(chunk[["Ticker", "Name"]].set_index("Ticker"),
-                             use_container_width=True)
+                             width="stretch")
     else:
         st.dataframe(wdf.sort_values("Ticker").set_index("Ticker"),
-                     use_container_width=True)
+                     width="stretch")
 
 st.divider()
 st.caption("Scores rate ENTRY QUALITY right now — they are not price predictions. "

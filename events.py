@@ -452,9 +452,12 @@ def earnings_text():
     if not ev:
         return ("📅 <b>Earnings — next 7 days</b>\n\nNone of your watchlist reports "
                 "in the next 7 days.")
-    lines = ["📅 <b>Earnings — next 7 days</b>",
+    lines = ["📅 <b>Results releases — next 7 days</b>",
+             "<i>These are RESULTS RELEASES (the numbers) — the event that "
+             "gaps the price. The analyst call follows the same day.</i>",
              "🔴 ≤2 days · 🟠 3-4 · 🟡 5-7  (gap risk — avoid new entries just before)",
              "➕ = tracked in the sector pages but NOT in your watchlist",
+             "~ = ESTIMATED date (European stocks) — verify in Trade Republic",
              ""]
     # Warm every per-ticker cache CONCURRENTLY first: histories, earnings dates
     # and option chains are all network waits, and the loop below hits each of
@@ -471,6 +474,11 @@ def earnings_text():
         emoji, _ = earnings_impact(e["days"])
         nm = f" · {e['name']}" if e["name"] else ""
         tag = " ➕" if e.get("extra") else ""
+        # European dates are vendor ESTIMATES, not confirmed (see
+        # earnings_guard.date_is_estimated) — say so instead of implying the
+        # same confidence as a US date.
+        if "." in e["ticker"]:
+            tag += " ~"
         im = implied_move(e["ticker"])
         mv = f" · options expect ±{im['pct']:.0f}%" if im else ""
         lines.append(f"{emoji} <b>{e['ticker']}</b>{tag}{nm} — {when}{mv}")
