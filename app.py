@@ -593,12 +593,16 @@ with tabs[1]:
 # ---------------------------------------------------------- 5. dip ranking
 with tabs[2]:
     st.subheader("King Stocks — best dip-buy setups now")
-    st.caption("The tested edge: deep oversold (RSI under 30) at a tested support "
-               "level, with room to run before the next resistance.")
+    st.caption("Score = how deep the dip is (RSI) + room to the next resistance. "
+               "Support and Trend are shown for context but don't change the score.")
     rrows = get_rank(15)
     rdf = pd.DataFrame([{
         "Ticker": r["ticker"], "Name": s.name_for(r["ticker"]) or "",
-        "Score": r["score"], "Price": r["price"], "RSI": r["rsi"],
+        "Score": r["score"],
+        "Earnings": (("⚠️ " if r.get("earn_block") else "")
+                     + (f"in {r['earn_days']}d" if r.get("earn_days") is not None
+                        and r["earn_days"] <= 30 else "")),
+        "Price": r["price"], "RSI": r["rsi"],
         "Support": (r.get("support_tag") or "—"),
         "Room": (r.get("upside") or {}).get("room_r"),
         "In range %": r.get("range_pos"),
@@ -616,7 +620,9 @@ with tabs[2]:
         width="stretch")
     st.caption("**Room** = how far to the next resistance, in units of your stop. "
                "Under 1R the target is blocked. **In range %** under 40 = a real "
-               "pullback; over 55 = you'd be chasing.")
+               "pullback; over 55 = you'd be chasing. ⚠️ Earnings = reports "
+               "inside your holding time, so your stop can't protect you — "
+               "these sink to the bottom.")
 
 # -------------------------------------------------------------- 6. one stock
 with tabs[3]:

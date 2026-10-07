@@ -7,20 +7,15 @@ tradable stocks (your watchlist + all sector-heatmap constituents, ~100 names)
 by how well each matches the edge we backtested, and show the best-qualified
 candidates *at this moment*. Re-run any time — it re-analyses live.
 
-0-100 FIT SCORE. Every weight below was set by backtest, not opinion — see
-_score_100 for the numbers behind each one:
-  Dip / RSI    30  deep oversold is the real signal (RSI<30 = 56% win / +0.174 R)
-  Room to run  20  space to the next resistance (>=2R = 56% win / +0.179 R)
-  Support      20  at a tested floor (53% win / +0.109 R vs 50% / +0.048 away)
-  Trend         8  price vs its ~2-day trend line   (measured ~0 — small weight)
-  Turning up    4  RSI ticking back up              (measured ~0)
-  Sector        3  its sector trending up           (~0 alone…)
-  Sector fit    3  …but +0.045 R when it sits UNDER support
-  Regime        3  broad market (SPY) healthy
-  VWAP          3  mainly for its AVOID warnings    (measured ~0)
-  Volume        2  no monotonic signal              (measured ~0)
-  Rel. strength 1  measured ~0 three separate ways  (display cue only)
-Bands: 75+ strong fit · 60-74 good · 45-59 watch · <45 weak.
+0-100 FIT SCORE (v3, 2026-10-07) — two factors, both validated on the WHOLE
+score, not just one at a time (22,862 samples, two separate time halves):
+  Dip / RSI    60  RSI 25 or lower = full points, fading to 0 at RSI 50
+  Room to run  40  space to the next resistance, in units of your stop
+Support, VWAP, trend, climb and sector are still computed and shown as
+context tags, but no longer move the number: together they made the old
+13-part score rank WORSE than random (see _score_100).
+Bands (measured, fast plan): 75+ 57% win / +0.20R · 60-74 57% / +0.16R ·
+45-59 55% / +0.15R · <45 52% / +0.09R.
 A name that also meets our strict live-alert trigger is flagged ★ FIRING.
 
 Run:  python rank_today.py
@@ -71,10 +66,8 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
     # that. Kept (not removed) because a collapsing stock is still worse to hold.
     if price > ema_val:
         trend = max(3.0, min(8.0, 8.0 - max(0.0, dist - 6.0) * 0.6))
-        reasons.append("above short-term trend")
     else:
         trend = max(0.0, min(3.0, 3.0 + dist * 0.4))   # dist is negative here
-        reasons.append("below short-term trend")
 
     # Dip / RSI (0-37). RE-SHAPED 2026-08-13 from a 23744-setup test: the edge is
     # concentrated in DEEP oversold, not the mid dip zone the old curve peaked on.
@@ -241,23 +234,59 @@ def _score_100(price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy
         align = 3.0
         reasons.append("✅ sector rising under support")
 
-    total = core + supp + vwap_s + rs + align + space + wkpts + climb
+    # ================= SCORE v3 (2026-10-07): DIP + ROOM ONLY =================
+    # Validated on 22,862 samples (71 US large-caps, Oct 2022 - Aug 2026) run
+    # through this exact function + the live daily_context(), split in two halves:
+    #
+    #   "buy the top 3 each day" edge vs. picking at random, avg R:
+    #                         2022-23 fast / normal / wide   2024-26 fast / normal / wide
+    #   OLD 13-part score      -0.013 / -0.127 / -0.113       +0.022 / +0.031 / -0.053
+    #   dip + room only        +0.053 / +0.119 / +0.047       +0.060 / +0.058 / +0.041
+    #
+    # The old score's TOP quintile was its WORST (normal +0.167R vs +0.215R).
+    # Why: the two real edges — deep RSI and room to the next resistance — are
+    # rare (RSI<30 in ~3% of samples), so they were drowned by parts that fire
+    # constantly and carry no edge: support (fired in 68% of samples, ~zero
+    # edge), climb, VWAP. Worse, "Trend" (+8 above the trend line) and the old
+    # counter-trend haircut ACTIVELY fought the edge: below-trend dips beat
+    # above-trend ones in BOTH halves (+0.264/+0.238R vs +0.170/+0.179R).
+    #
+    # Everything computed above is still used — as `reasons` tags (support,
+    # VWAP, trend, climb, sector) shown as context in /score and the table —
+    # but only these two factors set the number that ranks the list.
+    dip = max(0.0, min(1.0, (50.0 - rsi_now) / 25.0)) * 60.0   # RSI 25 -> 60, 50 -> 0
+    room = (upside or {}).get("room_r")
+    if room is None:
+        room_pts = 0.0                       # unknown room earns nothing
+    elif room >= 3.0:
+        room_pts = 40.0
+    elif room >= 2.0:
+        room_pts = 32.0
+    elif room >= 1.5:
+        room_pts = 20.0
+    elif room >= 1.0:
+        room_pts = 9.0
+    else:
+        room_pts = 0.0
+    total = dip + room_pts
 
-    # -------------- smooth honesty adjustments --------------
-    if rsi_now > 60:
-        total -= (rsi_now - 60) * 1.8              # too extended: the dip passed
-    if price < ema_val and ema_val:
-        below = (ema_val - price) / ema_val * 100.0
-        total *= (1.0 - min(0.15, below * 0.03))   # gradual counter-trend haircut
-        reasons.append("counter-trend risk")
-
-    parts = {"Trend": (trend, 8), "Dip/RSI": (rsi_s, 30), "Turning up": (turn, 4),
-             "Volume": (vol, 2), "Sector": (sec, 3), "Regime": (reg, 3),
-             "Room to run": (space, 18), "Support +": (supp, 18),
-             "VWAP +": (vwap_s, 3), "Rel.str +": (rs, 1), "Sector fit +": (align, 3),
-             "Week trend +": (wkpts, 3), "Climb pullback +": (climb, 8)}
+    parts = {"Dip / RSI": (dip, 60), "Room to run": (room_pts, 40)}
 
     return int(round(max(0.0, min(100.0, total)))), reasons, parts
+
+
+# TREND = the DAILY higher-highs / higher-lows structure (scanner.trend_structure),
+# the same thing Grace checks on the 1-week and 1-month chart. Replaces the old
+# "above/below trend" line, which was price vs a 50 x 15-min average (~2 days)
+# and could say "uptrend" right above a section reporting a daily downtrend.
+_TREND_LBL = {"uptrend": "📈 uptrend", "stalling": "⚠️ uptrend losing steam",
+              "uptrend_broken": "🔻 uptrend broke", "downtrend": "📉 downtrend",
+              "basing": "〰️ basing", "sideways": "〰️ sideways"}
+
+
+def trend_label(r) -> str:
+    st = (((r.get("trend_heat") or {}).get("struct") or {}).get("state"))
+    return _TREND_LBL.get(st, "trend unclear")
 
 
 def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
@@ -294,12 +323,22 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
 
     ctx = ctx or {}
     sec_strong = s.sector_is_strong(ticker)
+    # The DIP is measured on DAILY RSI (2026-10-07). It is the version the score
+    # was validated on, it matches a hold of days, and it matches the chart Grace
+    # reads. 15m RSI swings with every intraday bounce: McDonald's sat at daily
+    # RSI 26 (a top-ranked dip) while 15m read 53 after one green morning, and it
+    # fell off the table. 15m stays only for the live alert trigger (`firing`).
+    rsi_15m, rsi_15m_prev = rsi_now, rsi_prev
+    if ctx.get("rsi_daily") is not None:
+        rsi_now = ctx["rsi_daily"]
+        rsi_prev = ctx.get("rsi_daily_prev", rsi_now)
     score, reasons, parts = _score_100(
         price, ema_val, rsi_now, rsi_prev, vol_ratio, sec_strong, healthy,
         vwap_state=ctx.get("vwap_state"), rel_strength=ctx.get("rel_strength"),
         support_bonus=ctx.get("support_bonus", 0.0), support_tag=ctx.get("support_tag"),
         upside=ctx.get("upside"), trend_heat=ctx.get("trend_heat"))
-    firing = bool(price > ema_val and rsi_prev <= s.RSI_OVERSOLD and rsi_now > rsi_prev)
+    firing = bool(price > ema_val and rsi_15m_prev <= s.RSI_OVERSOLD
+                  and rsi_15m > rsi_15m_prev)
 
     # ATR-based stop → 1%-rule position size. Prefer DAILY ATR (realistic for a
     # swing hold); fall back to the 15m ATR only if daily isn't available.
@@ -322,8 +361,10 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
 
     return {
         "ticker": ticker, "score": score, "price": price,
-        "currency": s.ticker_currency(ticker), "rsi": rsi_now,
-        "vol_ratio": vol_ratio, "uptrend": price > ema_val,
+        "currency": s.ticker_currency(ticker), "rsi": rsi_now, "rsi_15m": rsi_15m,
+        "vol_ratio": vol_ratio,
+        "uptrend": (((ctx.get("trend_heat") or {}).get("struct") or {})
+                    .get("state") == "uptrend"),
         "sector_strong": sec_strong, "firing": firing,
         "as_of": as_of, "reasons": reasons, "parts": parts, "realtime": realtime,
         "stop": stop, "stop_pct": stop_pct, "risk": risk,
@@ -632,7 +673,7 @@ def score_one(ticker: str, healthy=None) -> str:
     if fresh:
         head.append(fresh)
     snapshot = (f"Price <b>{r['price']:.2f} {cur}</b> · RSI {r['rsi']:.0f} · "
-                f"{'uptrend' if r['uptrend'] else 'below trend'} · "
+                f"{trend_label(r)} · "
                 f"vol {r['vol_ratio']:.1f}×")
     breakdown_block = (f"<b>Score breakdown</b>\n<pre>{breakdown}</pre>\n"
                        f"{(' · '.join(r['reasons']))}")
@@ -696,7 +737,25 @@ def rank(top_n: int = TOP_N, healthy=None):
         r = _score_from_df(t, df, healthy, ctx=ctx, rt_price=rtp) if ctx else r0
         if r:
             rows.append(r)
-    rows.sort(key=lambda x: (x["score"], x["vol_ratio"]), reverse=True)
+    # EARNINGS INSIDE THE HOLD WINDOW. Every score assumes the stop can execute;
+    # an earnings gap opens past it, so the R maths the score rests on no longer
+    # holds. Such setups keep their score (it is still the same chart) but sink
+    # below every clean setup, so they can never take a top slot from one.
+    # Dates come from the 12h disk cache, prefetched in parallel.
+    hold = s.mode_hold_days()
+    try:
+        s.prefetch_earnings_dates([r["ticker"] for r in rows])
+    except Exception:
+        pass
+    for r in rows:
+        try:
+            d = s.days_to_earnings(r["ticker"])
+        except Exception:
+            d = None
+        r["earn_days"] = d
+        r["earn_block"] = d is not None and 0 <= d <= hold
+    rows.sort(key=lambda x: (not x["earn_block"], x["score"], x["vol_ratio"]),
+              reverse=True)
     top = rows[:top_n]
     # News lean only for the handful actually shown (keeps /rank fast). Shown as a
     # context tag — NOT folded into the score (keyword sentiment is too rough, and
@@ -873,7 +932,7 @@ def format_ranking(rows, healthy: bool = True) -> str:
         # Name the SOURCE of each factor — "uptrend" alone read like an RSI thing,
         # but it is price vs its 50-EMA, which is a different signal from RSI.
         # "50-EMA" read like 50 DAYS; it is 50 x 15-min bars ≈ 2 trading days.
-        setup = ["📈 above 2-day trend" if r["uptrend"] else "📉 below 2-day trend"]
+        setup = [trend_label(r)]
         if r["rsi"] <= 45:
             setup.append("dip zone")
         elif r["rsi"] > 60:

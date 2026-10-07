@@ -1036,6 +1036,21 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
     # distorted tiny during thin pre-/after-market hours).
     try:
         ctx["atr_daily"] = float(atr(ddf, ATR_LEN).iloc[-1])
+        # DAILY RSI for the dip score, with the live price standing in for
+        # today's close when today's bar exists (so it is current, not
+        # yesterday's). Before the session there is no today bar and the last
+        # completed day is used as-is.
+        try:
+            _c = ddf["Close"].dropna().copy()
+            _last = _c.index[-1]
+            _today = dt.datetime.now(_last.tzinfo).date() if _last.tzinfo else dt.date.today()
+            if _last.date() == _today and price:
+                _c.iloc[-1] = float(price)
+            _r = rsi(_c, RSI_LEN)
+            ctx["rsi_daily"] = float(_r.iloc[-1])
+            ctx["rsi_daily_prev"] = float(_r.iloc[-2])
+        except Exception:
+            pass
     except Exception:
         pass
     try:
@@ -1224,6 +1239,17 @@ def mode_horizon() -> str:
     if m == "wide":
         return "1–3 weeks (give it room)"
     return "days–weeks"
+
+
+def mode_hold_days() -> int:
+    """Calendar days a trade is typically held in the active mode — the window in
+    which an earnings report would land INSIDE the trade."""
+    m = load_mode()
+    if m == "fast":
+        return 2
+    if m == "wide":
+        return 21
+    return 10
 
 
 def risk_position(price: float, currency: str, stop_pct: float,
