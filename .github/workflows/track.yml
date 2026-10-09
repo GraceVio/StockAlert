@@ -1,0 +1,53 @@
+name: Track record
+
+# Logs the Dip ranking once per trading day AFTER the US close, then fills in
+# 5- and 10-day results for older picks, and commits track_record.csv. The
+# website and /record read that file — a live, current scorecard.
+#
+# 21:47 UTC = 22:47 CET in winter / 23:47 CEST in summer: after the 16:00 ET
+# close either way (US close is 20:00 UTC in summer, 21:00 UTC in winter).
+# Off-peak minute — GitHub drops/delays crons at :00 most often.
+on:
+  schedule:
+    - cron: "47 21 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: track-record
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Log today's picks + score older ones
+        env:
+          ALPACA_KEY_ID: ${{ secrets.ALPACA_KEY_ID }}
+          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          TRADE_MODE: ${{ secrets.TRADE_MODE }}
+        run: python track_record.py
+
+      - name: Commit the record
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add track_record.csv
+          git diff --cached --quiet && { echo "No change."; exit 0; }
+          git commit -m "Track record $(date -u +%F)"
+          # The Telegram poller can commit watchlist edits too — rebase first.
+          git pull --rebase --autostash && git push
