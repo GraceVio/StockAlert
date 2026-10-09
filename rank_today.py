@@ -284,6 +284,19 @@ _TREND_LBL = {"uptrend": "📈 uptrend", "stalling": "⚠️ uptrend losing stea
               "basing": "〰️ basing", "sideways": "〰️ sideways"}
 
 
+def fall_label(r) -> str:
+    """'⚡ sharp fall −12% (5d)' / '📉 big fall −15% (20d)' / ''.
+    INFORMATION ONLY — tested as a score bonus 2026-10-09 and rejected: half of
+    all 75+ scores already are big/sharp falls (vs 6% of stocks overall), so
+    the deep-RSI points already capture it and a bonus double-counts."""
+    f5, f20 = r.get("fell_5d"), r.get("fell_20d")
+    if f5 is not None and f5 <= -8:
+        return f"⚡ sharp fall {f5:.0f}% (5d)"
+    if f20 is not None and f20 <= -11:
+        return f"📉 big fall {f20:.0f}% (20d)"
+    return ""
+
+
 def trend_label(r) -> str:
     st = (((r.get("trend_heat") or {}).get("struct") or {}).get("state"))
     return _TREND_LBL.get(st, "trend unclear")
@@ -378,6 +391,8 @@ def _score_from_df(ticker, df, healthy, ctx=None, rt_price=None):
         "support_note": ctx.get("support_note"),
         "sector": s.sector_info(ticker), "upside": ctx.get("upside"),
         "trend_heat": ctx.get("trend_heat"),
+        "fell_5d": ctx.get("fell_5d"), "fell_20d": ctx.get("fell_20d"),
+        "below_1y_high": ctx.get("below_1y_high"),
         "turning_up": rsi_now > rsi_prev,
     }
 
@@ -674,15 +689,24 @@ def score_one(ticker: str, healthy=None) -> str:
         head.append(fresh)
     snapshot = (f"Price <b>{r['price']:.2f} {cur}</b> · RSI {r['rsi']:.0f} · "
                 f"{trend_label(r)} · "
+                + (f"{r['below_1y_high']:.0f}% vs 1-yr high · "
+                   if r.get("below_1y_high") is not None else "") +
                 f"vol {r['vol_ratio']:.1f}×")
     breakdown_block = (f"<b>Score breakdown</b>\n<pre>{breakdown}</pre>\n"
                        f"{(' · '.join(r['reasons']))}")
 
     analyst = _analyst_line(ticker, r["price"], cur)
     insider = _insider_line(ticker)
+    # Timing hint after a sharp/big fall — 20-year study (5,839 sharp falls):
+    # buying at the close beat waiting for the first green day in every era
+    # (+1.9% vs +0.5% avg), but the low usually came LATER (median -5.5% more).
+    fl = fall_label(r)
+    fall_hint = (f"{fl} — historically, buying now beat waiting for a green day, "
+                 f"but it usually fell ~5% more first. Size smaller."
+                 if fl else "")
     sections = ["\n".join(head), snapshot]
-    for blk in (_support_line(r), _size_line(r), earn, news_line, analyst,
-                insider, eline):
+    for blk in (fall_hint, _support_line(r), _size_line(r), earn, news_line,
+                analyst, insider, eline):
         blk = blk.strip("\n") if blk else ""
         if blk:
             sections.append(blk)
@@ -874,8 +898,9 @@ def format_ranking(rows, healthy: bool = True) -> str:
     if fresh:
         lines.append(fresh)
     if not healthy:
-        lines.append("\n⚠️ <b>Market regime WEAK</b> (SPY below its 50-day avg). "
-                     "Dip-buys are lower-odds now — these are relative rankings only.")
+        lines.append("\n📉 <b>Whole market falling</b> (S&amp;P 500 below its 50-day "
+                     "avg). Historically the better time for dips — but expect "
+                     "more downside first.")
     lines.append("")
     for i, r in enumerate(rows, 1):
         star = " ★" if r["firing"] else ""
@@ -933,6 +958,8 @@ def format_ranking(rows, healthy: bool = True) -> str:
         # but it is price vs its 50-EMA, which is a different signal from RSI.
         # "50-EMA" read like 50 DAYS; it is 50 x 15-min bars ≈ 2 trading days.
         setup = [trend_label(r)]
+        if fall_label(r):
+            setup.append(fall_label(r))
         if r["rsi"] <= 45:
             setup.append("dip zone")
         elif r["rsi"] > 60:

@@ -54,9 +54,10 @@ HELP = (
     "<b>📅 What's coming?</b>\n"
     "/earnings — 📅 watchlist earnings, next 7 days\n"
     "/macro — 🏦 CPI/Fed/GDP events + 🔴🟠🟡 impact\n"
-    "/news — 🌍 market news · /news SYM 📰 for one stock\n\n"
-    "/insider SYM — 🧑‍💼 has management been buying its own stock?\n\n"
-    "/earnguard SYM — ⚠️ earnings gap risk before a report\n\n"
+    "/news — 🌍 market news · /news SYM 📰 for one stock\n"
+    "/earnguard SYM — ⚠️ earnings gap risk before a report\n"
+    "/insider SYM — 🧑‍💼 has management been buying its own stock?\n"
+    "/record — 📊 live track record of the Dip ranking\n\n"
     "<b>⚙️ Settings</b>\n"
     "/account — 💼 show/set account size (for position sizing)\n"
     "/mode — ⏱ fast · normal · wide (stop width + target)\n"
@@ -82,6 +83,7 @@ COMMAND_MENU = [
     ("score",     "Fit score 0-100 for a stock (e.g. NVDA)"),
     ("insider",   "Insider buying of a stock (SEC Form 4)"),
     ("earnguard", "Earnings gap risk for a stock"),
+    ("record",    "Live track record: do high scores make money?"),
     ("find",      "Find a ticker by company name"),
     ("scan",      "Run the dip-in-uptrend scan now"),
     ("sector",    "Sector strength ranking"),
@@ -524,7 +526,8 @@ def _do_status():
     picks = len([t for t in wl if t not in ("SPY", "QQQ")])
     try:
         healthy = s.market_is_healthy()
-        regime = "🟢 HEALTHY (dip-buys active)" if healthy else "🔴 WEAK (dip-buys suppressed)"
+        regime = ("🟢 HEALTHY" if healthy
+                  else "🔴 WEAK (market falling — historically the better dips)")
     except Exception:
         regime = "unknown (data fetch failed)"
     return (f"💚 <b>Bot is alive</b>\n"
@@ -535,9 +538,6 @@ def _do_status():
 
 
 def _do_scan():
-    if not s.market_is_healthy():
-        return ("Market regime <b>WEAK</b> (SPY below its 50-day average) — "
-                "dip-buys are suppressed. No scan alerts this run.")
     hits = []
     for t in s.WATCHLIST:
         a = s.check_ticker(t)
@@ -612,6 +612,12 @@ def handle(text: str):
             return nw.stock_news_text(q)
         _reply("🌍 Reading market news… one moment.")
         return nw.market_news_text()
+    if cmd == "/record":
+        try:
+            import track_record as tr
+            return tr.record_text()
+        except Exception as e:
+            return f"Could not read the track record ({e})."
     if cmd == "/earnguard":
         q = (parts[1] if len(parts) > 1 else "").strip().upper()
         if not q:

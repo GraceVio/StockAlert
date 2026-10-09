@@ -44,6 +44,7 @@ import market_mood as mm                 # noqa: E402
 import rank_today as rk                  # noqa: E402
 import events as ev                      # noqa: E402
 import earnings_guard as eg              # noqa: E402
+import track_record as tr                # noqa: E402
 
 st.set_page_config(page_title="StockAlert", page_icon="👑", layout="wide")
 
@@ -150,6 +151,13 @@ def get_snapshot():
 def get_rank(n=15):
     rows = rk.rank(n)
     return [{k: v for k, v in r.items() if k != "parts"} for r in rows]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_record():
+    """The live track record. Read from GitHub, where the daily workflow
+    commits it — the app's own copy only updates when it redeploys."""
+    return tr.load(prefer_remote=True)
 
 
 @st.cache_data(ttl=1800, show_spinner="Reading earnings dates…")
@@ -603,6 +611,8 @@ with tabs[2]:
                      + (f"in {r['earn_days']}d" if r.get("earn_days") is not None
                         and r["earn_days"] <= 30 else "")),
         "Price": r["price"], "RSI": r["rsi"],
+        "Fall": rk.fall_label(r),
+        "vs 1y high": r.get("below_1y_high"),
         "Support": (r.get("support_tag") or "—"),
         "Room": (r.get("upside") or {}).get("room_r"),
         "In range %": r.get("range_pos"),
@@ -610,19 +620,54 @@ with tabs[2]:
                                 or {}).get("state"), ""),
         "Sector": (r.get("sector") or {}).get("name", "") if isinstance(r.get("sector"), dict) else "",
     } for r in rrows])
-    for _c, _n in (("Price", 2), ("RSI", 0), ("Room", 1), ("In range %", 0)):
+    for _c, _n in (("Price", 2), ("RSI", 0), ("Room", 1), ("In range %", 0),
+                   ("vs 1y high", 0)):
         rdf[_c] = pd.to_numeric(rdf[_c], errors="coerce").round(_n)
     rdf = rdf.set_index("Ticker")
     st.dataframe(
         rdf.style.map(score_colour, subset=["Score"])
            .format({"Price": "{:.2f}", "RSI": "{:.0f}", "Room": "{:.1f}R",
-                    "In range %": "{:.0f}%"}, na_rep="—"),
+                    "In range %": "{:.0f}%", "vs 1y high": "{:+.0f}%"}, na_rep="—"),
         width="stretch")
     st.caption("**Room** = how far to the next resistance, in units of your stop. "
                "Under 1R the target is blocked. **In range %** under 40 = a real "
                "pullback; over 55 = you'd be chasing. ⚠️ Earnings = reports "
                "inside your holding time, so your stop can't protect you — "
-               "these sink to the bottom.")
+               "these sink to the bottom. ⚡ sharp fall = buying now beat "
+               "waiting for a green day, but expect ~5% more downside first.")
+
+    # ---- live track record: does a high score make money NOW?
+    st.subheader("Track record")
+    rec = get_record()
+    if rec.empty or rec["r5"].notna().sum() == 0:
+        st.caption("Live record starts with tonight's US close; first results "
+                   "appear 5 trading days later.")
+    else:
+        s5, s10 = tr.stats(rec, 5), tr.stats(rec, 10)
+        tdf = pd.DataFrame([{
+            "Score": a5["band"], "Picks": a5["n"],
+            "Up 5d": a5.get("up"), "Avg 5d": a5.get("avg"), "vs S&P 5d": a5.get("vs_spy"),
+            "Up 10d": a10.get("up"), "Avg 10d": a10.get("avg"),
+            "vs S&P 10d": a10.get("vs_spy"),
+        } for a5, a10 in zip(s5, s10)])
+        show_table(tdf, ["Avg 5d", "vs S&P 5d", "Avg 10d", "vs S&P 10d"],
+                   index_col="Score",
+                   fmt={"Up 5d": "{:.0f}%", "Up 10d": "{:.0f}%", "Picks": "{:.0f}"})
+        st.caption(f"Live picks since {tr.since(rec)}, bought at that day's close. "
+                   "Each dip counts once. vs S&P = better or worse than just "
+                   "holding the S&P 500 over the same days.")
+        with st.expander("Recent picks"):
+            rp = rec.sort_values(["date", "score"], ascending=[False, False]).head(40)
+            # One stock can be picked on several days, so the row name has to
+            # carry the date too — a duplicate index crashes the table styler.
+            rp = rp.assign(Pick=rp["ticker"] + " · " + rp["date"].astype(str).str[5:])
+            show_table(rp[["Pick", "score", "entry", "r5", "r10",
+                           "fell_first"]].rename(columns={
+                               "score": "Score", "entry": "Bought at",
+                               "r5": "After 5d", "r10": "After 10d",
+                               "fell_first": "Fell first"}),
+                       ["After 5d", "After 10d", "Fell first"], index_col="Pick",
+                       fmt={"Bought at": "{:.2f}", "Score": "{:.0f}"})
 
 # -------------------------------------------------------------- 6. one stock
 with tabs[3]:

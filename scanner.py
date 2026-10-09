@@ -1049,6 +1049,14 @@ def daily_context(ticker: str, ddf: pd.DataFrame, price: float, intraday=None) -
             _r = rsi(_c, RSI_LEN)
             ctx["rsi_daily"] = float(_r.iloc[-1])
             ctx["rsi_daily_prev"] = float(_r.iloc[-2])
+            # SIZE OF THE FALL + distance from the 1-year high (2026-10-09).
+            # 20-year dip study: a big/sharp fall bounced further in 16 of 20
+            # years; "below the 1-year high" answers "is it cheap vs its year".
+            _p = float(_c.iloc[-1])
+            if len(_c) > 21:
+                ctx["fell_5d"] = (_p / float(_c.iloc[-6]) - 1) * 100
+                ctx["fell_20d"] = (_p / float(_c.iloc[-21]) - 1) * 100
+            ctx["below_1y_high"] = (_p / float(_c.tail(252).max()) - 1) * 100
         except Exception:
             pass
     except Exception:
@@ -1297,7 +1305,7 @@ def market_is_healthy() -> bool:
         last = float(m["Close"].iloc[-1])
         healthy = last > float(sma50)
         print(f"  regime: {MARKET_INDEX} {last:.2f} vs 50d {float(sma50):.2f} "
-              f"-> {'HEALTHY' if healthy else 'WEAK (longs suppressed)'}")
+              f"-> {'HEALTHY' if healthy else 'WEAK (market falling)'}")
         return healthy
     except Exception as e:
         print(f"  regime check failed: {e} -> allowing trades")
@@ -1559,7 +1567,10 @@ def next_earnings_ts(ticker: str):
 # the 07:12 digest but far too slow for /earnings typed in chat. Earnings dates
 # move rarely, so a 12-hour TTL is safe; a stale entry is at worst a day old and
 # the date itself is what matters, not the minute.
-_EARN_CACHE_FILE = "earnings_cache.json"
+# Kept in the system temp folder, NOT the project folder: it is derived data
+# the bot rebuilds itself, so it should never sit next to files to upload.
+_EARN_CACHE_FILE = os.path.join(__import__("tempfile").gettempdir(),
+                                "stockalert_earnings_cache.json")
 _EARN_CACHE_TTL_H = 12
 _EARN_TS_CACHE = {}
 _EARN_CACHE_DIRTY = {"n": 0}
@@ -1944,9 +1955,14 @@ def log_alert(a: dict):
 def main():
     print(f"Scanning {len(WATCHLIST)} tickers on {INTERVAL}...")
 
+    # No weak-market pause (removed 2026-10-09). Over 20 years of daily dips
+    # (24,705 cases, 71 US large caps) dips bought while SPY was BELOW its 50-day
+    # average bounced better than in calm markets in 19 of 20 years — the one
+    # exception being the sudden 2020 Covid crash. Panic selling is exactly what
+    # creates the bounce. The regime is still reported, as information.
     if not market_is_healthy():
-        print("Market regime WEAK — long dip-buys suppressed this run. Done.")
-        return
+        print("Market regime WEAK (SPY below 50-day) — scanning anyway; weak-market "
+              "dips have bounced better historically.")
 
     alerts = []
     for ticker in WATCHLIST:
