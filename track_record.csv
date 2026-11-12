@@ -171,21 +171,21 @@ date,ticker,score,entry,rsi,room,fall,trend,earn_block,mode,r5,r10,spy5,spy10,fe
 2026-10-26,BKNG,67,153.140,35.200,2.230,,〰️ sideways,False,fast,0.398,6.759,-1.734,-1.657,-4.480
 2026-10-26,BAC,66,50.520,26.200,1.010,,📈 uptrend,False,fast,-1.880,0.059,-1.734,-1.657,-2.118
 2026-10-26,UBER,63,66.130,37.100,2.260,,🔻 uptrend broke,False,fast,0.877,7.621,-1.734,-1.657,-3.160
-2026-10-27,BA,91,168.180,25.300,2.880,⚡ sharp fall -12% (5d),🔻 uptrend broke,False,fast,3.050,,-1.989,,-1.885
-2026-10-27,NFLX,85,62.520,31.100,3.470,⚡ sharp fall -9% (5d),〰️ sideways,False,fast,1.440,,-1.989,,-1.807
-2026-10-27,SMHN.DE,81,50.250,29.700,2.420,📉 big fall -29% (20d),🔻 uptrend broke,False,fast,2.985,,-1.989,,-1.333
-2026-10-27,GOOGL,79,320.580,34.000,4.100,,🔻 uptrend broke,False,fast,-12.649,,-1.989,,-13.619
-2026-10-27,BKNG,74,150.140,32.500,2.560,⚡ sharp fall -8% (5d),〰️ sideways,False,fast,3.683,,-1.989,,-2.571
-2026-10-27,QBTS,69,12.130,34.600,2.100,📉 big fall -26% (20d),〰️ sideways,False,fast,-14.509,,-1.989,,-17.395
-2026-10-27,CRWV,69,59.570,34.600,2.250,📉 big fall -31% (20d),🔻 uptrend broke,False,fast,-9.787,,-1.989,,-16.972
-2026-10-27,UBER,65,65.780,36.200,2.510,,🔻 uptrend broke,False,fast,1.247,,-1.989,,-2.645
-2026-10-27,JD,62,25.570,37.400,2.680,,🔻 uptrend broke,False,fast,5.241,,-1.989,,-1.193
-2026-10-27,IREN,59,27.440,33.800,1.990,📉 big fall -34% (20d),📉 downtrend,False,fast,-10.860,,-1.989,,-20.321
-2026-10-27,PLD,57,126.470,39.800,2.950,,📉 downtrend,False,fast,2.064,,-1.989,,-1.407
-2026-10-27,RCAT,57,4.870,34.800,1.580,📉 big fall -24% (20d),📉 downtrend,False,fast,-8.419,,-1.989,,-10.062
-2026-10-27,SNEX,56,56.130,30.300,1.460,📉 big fall -14% (20d),📉 downtrend,False,fast,0.303,,-1.989,,-6.895
-2026-10-27,SDF.DE,56,12.960,30.500,1.310,📉 big fall -15% (20d),📉 downtrend,False,fast,-0.386,,-1.989,,-1.312
-2026-10-27,TMUS,54,146.830,35.900,1.850,,📉 downtrend,False,fast,5.162,,-1.989,,-2.098
+2026-10-27,BA,91,168.180,25.300,2.880,⚡ sharp fall -12% (5d),🔻 uptrend broke,False,fast,3.050,3.092,-1.989,-2.565,-1.885
+2026-10-27,NFLX,85,62.520,31.100,3.470,⚡ sharp fall -9% (5d),〰️ sideways,False,fast,1.440,1.184,-1.989,-2.565,-1.807
+2026-10-27,SMHN.DE,81,50.250,29.700,2.420,📉 big fall -29% (20d),🔻 uptrend broke,False,fast,2.985,-4.876,-1.989,-2.565,-1.333
+2026-10-27,GOOGL,79,320.580,34.000,4.100,,🔻 uptrend broke,False,fast,-12.649,-10.356,-1.989,-2.565,-13.619
+2026-10-27,BKNG,74,150.140,32.500,2.560,⚡ sharp fall -8% (5d),〰️ sideways,False,fast,3.683,6.074,-1.989,-2.565,-2.571
+2026-10-27,QBTS,69,12.130,34.600,2.100,📉 big fall -26% (20d),〰️ sideways,False,fast,-14.509,-13.603,-1.989,-2.565,-17.395
+2026-10-27,CRWV,69,59.570,34.600,2.250,📉 big fall -31% (20d),🔻 uptrend broke,False,fast,-9.787,-18.197,-1.989,-2.565,-16.972
+2026-10-27,UBER,65,65.780,36.200,2.510,,🔻 uptrend broke,False,fast,1.247,6.491,-1.989,-2.565,-2.645
+2026-10-27,JD,62,25.570,37.400,2.680,,🔻 uptrend broke,False,fast,5.241,10.716,-1.989,-2.565,-1.193
+2026-10-27,IREN,59,27.440,33.800,1.990,📉 big fall -34% (20d),📉 downtrend,False,fast,-10.860,-28.098,-1.989,-2.565,-20.321
+2026-10-27,PLD,57,126.470,39.800,2.950,,📉 downtrend,False,fast,2.064,2.870,-1.989,-2.565,-1.407
+2026-10-27,RCAT,57,4.870,34.800,1.580,📉 big fall -24% (20d),📉 downtrend,False,fast,-8.419,-13.552,-1.989,-2.565,-10.062
+2026-10-27,SNEX,56,56.130,30.300,1.460,📉 big fall -14% (20d),📉 downtrend,False,fast,0.303,1.051,-1.989,-2.565,-6.895
+2026-10-27,SDF.DE,56,12.960,30.500,1.310,📉 big fall -15% (20d),📉 downtrend,False,fast,-0.386,-1.003,-1.989,-2.565,-1.312
+2026-10-27,TMUS,54,146.830,35.900,1.850,,📉 downtrend,False,fast,5.162,15.154,-1.989,-2.565,-2.098
 2026-10-28,BA,92,167.140,24.800,2.420,⚡ sharp fall -13% (5d),🔻 uptrend broke,False,fast,5.899,,-0.712,,0.359
 2026-10-28,NFLX,87,61.990,30.300,3.560,,〰️ sideways,False,fast,7.098,,-0.712,,-0.968
 2026-10-28,BKNG,78,147.940,30.700,2.300,,〰️ sideways,False,fast,15.567,,-0.712,,-0.439
@@ -233,21 +233,21 @@ date,ticker,score,entry,rsi,room,fall,trend,earn_block,mode,r5,r10,spy5,spy10,fe
 2026-11-02,BA,61,175.400,37.800,2.000,,〰️ sideways,False,fast,-1.722,,0.078,,-3.712
 2026-11-02,HOOD,61,83.840,28.500,1.300,⚡ sharp fall -10% (5d),📉 downtrend,False,fast,-0.620,,0.078,,-9.936
 2026-11-02,MRVL,60,171.410,28.800,1.490,⚡ sharp fall -27% (5d),〰️ sideways,False,fast,-9.807,,0.078,,-22.677
-2026-11-03,GOOGL,100,280.030,22.200,4.130,⚡ sharp fall -13% (5d),📉 downtrend,False,fast,,,,,
-2026-11-03,INTC,100,60.550,23.700,3.560,⚡ sharp fall -35% (5d),📉 downtrend,False,fast,,,,,
-2026-11-03,RDDT,100,96.150,22.600,4.290,⚡ sharp fall -30% (5d),🔻 uptrend broke,False,fast,,,,,
-2026-11-03,CAT,97,623.940,26.200,3.290,⚡ sharp fall -13% (5d),📉 downtrend,False,fast,,,,,
-2026-11-03,MRVL,82,171.970,29.100,2.050,⚡ sharp fall -29% (5d),〰️ sideways,False,fast,,,,,
-2026-11-03,RCAT,77,4.460,31.400,2.230,⚡ sharp fall -8% (5d),〰️ sideways,False,fast,,,,,
-2026-11-03,QBTS,73,10.370,28.000,1.560,⚡ sharp fall -15% (5d),📉 downtrend,False,fast,,,,,
-2026-11-03,ALAB,72,233.620,33.400,2.150,⚡ sharp fall -19% (5d),📉 downtrend,False,fast,,,,,
-2026-11-03,SNDK,70,1126.520,34.000,2.560,⚡ sharp fall -14% (5d),📉 downtrend,False,fast,,,,,
-2026-11-03,ARM,67,202.490,35.400,2.390,⚡ sharp fall -11% (5d),📉 downtrend,False,fast,,,,,
-2026-11-03,DDOG,66,220.520,35.700,2.100,⚡ sharp fall -21% (5d),📉 downtrend,False,fast,,,,,
-2026-11-03,SNOW,63,295.040,37.200,2.100,⚡ sharp fall -13% (5d),⚠️ uptrend losing steam,False,fast,,,,,
-2026-11-03,MU,55,855.100,40.400,2.550,📉 big fall -18% (20d),〰️ sideways,False,fast,,,,,
-2026-11-03,DELL,55,408.400,35.500,1.500,⚡ sharp fall -19% (5d),〰️ sideways,False,fast,,,,,
-2026-11-03,BAC,55,49.660,26.900,0.380,,⚠️ uptrend losing steam,False,fast,,,,,
+2026-11-03,GOOGL,100,280.030,22.200,4.130,⚡ sharp fall -13% (5d),📉 downtrend,False,fast,2.625,,-0.587,,-1.057
+2026-11-03,INTC,100,60.550,23.700,3.560,⚡ sharp fall -35% (5d),📉 downtrend,False,fast,-3.997,,-0.587,,-14.930
+2026-11-03,RDDT,100,96.150,22.600,4.290,⚡ sharp fall -30% (5d),🔻 uptrend broke,False,fast,2.621,,-0.587,,-5.148
+2026-11-03,CAT,97,623.940,26.200,3.290,⚡ sharp fall -13% (5d),📉 downtrend,False,fast,-6.310,,-0.587,,-11.721
+2026-11-03,MRVL,82,171.970,29.100,2.050,⚡ sharp fall -29% (5d),〰️ sideways,False,fast,-10.223,,-0.587,,-22.928
+2026-11-03,RCAT,77,4.460,31.400,2.230,⚡ sharp fall -8% (5d),〰️ sideways,False,fast,-5.605,,-0.587,,-27.130
+2026-11-03,QBTS,73,10.370,28.000,1.560,⚡ sharp fall -15% (5d),📉 downtrend,False,fast,1.061,,-0.587,,-18.226
+2026-11-03,ALAB,72,233.620,33.400,2.150,⚡ sharp fall -19% (5d),📉 downtrend,False,fast,-7.465,,-0.587,,-23.975
+2026-11-03,SNDK,70,1126.520,34.000,2.560,⚡ sharp fall -14% (5d),📉 downtrend,False,fast,-23.660,,-0.587,,-28.632
+2026-11-03,ARM,67,202.490,35.400,2.390,⚡ sharp fall -11% (5d),📉 downtrend,False,fast,-10.371,,-0.587,,-19.438
+2026-11-03,DDOG,66,220.520,35.700,2.100,⚡ sharp fall -21% (5d),📉 downtrend,False,fast,-19.100,,-0.587,,-22.683
+2026-11-03,SNOW,63,295.040,37.200,2.100,⚡ sharp fall -13% (5d),⚠️ uptrend losing steam,False,fast,0.244,,-0.587,,-9.722
+2026-11-03,MU,55,855.100,40.400,2.550,📉 big fall -18% (20d),〰️ sideways,False,fast,-15.202,,-0.587,,-23.985
+2026-11-03,DELL,55,408.400,35.500,1.500,⚡ sharp fall -19% (5d),〰️ sideways,False,fast,-18.124,,-0.587,,-22.870
+2026-11-03,BAC,55,49.660,26.900,0.380,,⚠️ uptrend losing steam,False,fast,2.054,,-0.587,,-0.785
 2026-11-04,INTC,100,58.270,22.800,4.310,⚡ sharp fall -39% (5d),📉 downtrend,False,fast,,,,,
 2026-11-04,CAT,100,591.300,22.700,4.040,⚡ sharp fall -17% (5d),📉 downtrend,False,fast,,,,,
 2026-11-04,RCAT,97,4.000,26.300,3.200,⚡ sharp fall -19% (5d),〰️ sideways,False,fast,,,,,
@@ -295,3 +295,18 @@ date,ticker,score,entry,rsi,room,fall,trend,earn_block,mode,r5,r10,spy5,spy10,fe
 2026-11-09,RHM.DE,63,845.400,32.300,1.890,⚡ sharp fall -15% (5d),⚠️ uptrend losing steam,False,fast,,,,,
 2026-11-09,ALAB,62,216.870,37.500,2.220,📉 big fall -33% (20d),📉 downtrend,False,fast,,,,,
 2026-11-09,DELL,61,346.310,32.700,1.950,⚡ sharp fall -12% (5d),〰️ sideways,False,fast,,,,,
+2026-11-10,NVDA,100,168.890,23.900,3.510,⚡ sharp fall -18% (5d),📉 downtrend,False,fast,,,,,
+2026-11-10,INTC,91,58.130,28.900,3.450,📉 big fall -43% (20d),📉 downtrend,False,fast,,,,,
+2026-11-10,DDOG,84,178.400,28.300,2.330,⚡ sharp fall -19% (5d),📉 downtrend,False,fast,,,,,
+2026-11-10,SNDK,82,859.990,29.200,2.720,⚡ sharp fall -24% (5d),📉 downtrend,False,fast,,,,,
+2026-11-10,CAT,78,584.570,30.900,2.860,📉 big fall -24% (20d),📉 downtrend,False,fast,,,,,
+2026-11-10,TEAM,78,148.600,25.800,1.520,⚡ sharp fall -22% (5d),🔻 uptrend broke,False,fast,,,,,
+2026-11-10,RDDT,78,98.670,31.000,3.000,📉 big fall -36% (20d),📉 downtrend,False,fast,,,,,
+2026-11-10,RHM.DE,71,853.300,33.700,2.770,⚡ sharp fall -15% (5d),⚠️ uptrend losing steam,False,fast,,,,,
+2026-11-10,SHELL.AS,70,43.540,37.600,3.220,,📈 uptrend,False,fast,,,,,
+2026-11-10,MU,66,725.110,35.800,2.020,⚡ sharp fall -15% (5d),〰️ sideways,False,fast,,,,,
+2026-11-10,UPST,64,20.410,36.700,2.010,📉 big fall -14% (20d),〰️ sideways,False,fast,,,,,
+2026-11-10,MRVL,63,154.390,32.100,1.770,⚡ sharp fall -10% (5d),〰️ sideways,False,fast,,,,,
+2026-11-10,IREN,59,19.730,33.600,1.870,⚡ sharp fall -19% (5d),📉 downtrend,False,fast,,,,,
+2026-11-10,CRM,58,213.480,34.300,1.630,,🔻 uptrend broke,False,fast,,,,,
+2026-11-10,NOW,55,99.610,27.100,0.780,⚡ sharp fall -9% (5d),📉 downtrend,False,fast,,,,,
